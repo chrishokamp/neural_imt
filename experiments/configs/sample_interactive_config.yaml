@@ -1,0 +1,46 @@
+'src_vocab_size': 20000
+'trg_vocab_size': 20000
+'enc_embed': 300
+'dec_embed': 300
+'enc_nhids': 800
+'dec_nhids': 800
+
+'saved_parameters': '/media/1tb_drive/multilingual-multimodal/flickr30k/train/processed/BERTHA-TEST_Adam_wmt-multimodal_internal_data_dropout0.3_ff_noiseFalse_search_model_en2es_vocab20000_emb300_rec800_batch15/best_bleu_model_1455464992_BLEU31.61.npz'
+'src_vocab': '/media/1tb_drive/multilingual-multimodal/flickr30k/train/processed/BERTHA-TEST_Adam_wmt-multimodal_internal_data_dropout0.3_ff_noiseFalse_search_model_en2es_vocab20000_emb300_rec800_batch15/vocab.en-de.en.pkl'
+'trg_vocab': '/media/1tb_drive/multilingual-multimodal/flickr30k/train/processed/BERTHA-TEST_Adam_wmt-multimodal_internal_data_dropout0.3_ff_noiseFalse_search_model_en2es_vocab20000_emb300_rec800_batch15/vocab.en-de.de.pkl'
+'src_data': '/media/1tb_drive/multilingual-multimodal/flickr30k/train/processed/BERTHA-TEST_Adam_wmt-multimodal_internal_data_dropout0.3_ff_noiseFalse_search_model_en2es_vocab20000_emb300_rec800_batch15/training_data/train.en.tok.shuf'
+'trg_data': '/media/1tb_drive/multilingual-multimodal/flickr30k/train/processed/BERTHA-TEST_Adam_wmt-multimodal_internal_data_dropout0.3_ff_noiseFalse_search_model_en2es_vocab20000_emb300_rec800_batch15/training_data/train.de.tok.shuf'
+
+'unk_id': 1
+# Bleu script that will be used (moses multi-perl in this case)
+'bleu_script': '/home/chris/projects/neural_mt/test_data/sample_experiment/tiny_demo_dataset/multi-bleu.perl'
+# Optimization related ----------------------------------------------------
+# Batch size
+'batch_size': 5
+# This many batches will be read ahead and sorted
+'sort_k_batches': 1
+# Optimization step rule
+'step_rule': 'AdaDelta'
+# Gradient clipping threshold
+'step_clipping': 1.
+# Std of weight initialization
+'weight_scale': 0.01
+'seq_len': 40
+'finish_after': 100
+
+# Params needed for prediction
+'prefix_decoding': True
+
+'source_lang': 'en'
+'target_lang': 'de'
+'brick_delimiter': '-'
+
+'beam_size': 10
+'n_best': 20
+'normalized_bleu': True
+
+# path to the moses perl script for tokenization
+'tokenize_script': '/home/chris/projects/neural_mt/server/tokenizer.perl'
+# path to the moses perl script for detokenization
+'detokenize_script': '/home/chris/projects/neural_mt/server/detokenizer.perl'
+

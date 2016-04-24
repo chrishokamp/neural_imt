@@ -28,6 +28,15 @@ parser.add_argument("--bokeh",  default=False, action="store_true",
 
 if __name__ == "__main__":
     # Get configurations for model
+
+    # WORKING: set up IMT training
+    # training examples are triples of (source, prefix, completion)
+    # so references are now completions, not the complete reference
+    # THINKING: how to account for completions inside words? -- character NMT on target-side is the most satisfying,
+    # but is difficult to implement
+
+
+
     args = parser.parse_args()
     arg_dict = vars(args)
     configuration_file = arg_dict['exp_config']

@@ -212,7 +212,78 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
     main_loop.run()
 
 
-# TODO: allow configuration of decoding mode -- full, or prefix-
+
+# TODO: move evaluation functions to separate module
+# TODO: update users of this function to new return tuple format
+def imt_f1(hyp, ref):
+    """
+    compute Ueffing and Ney F1 for IMT
+
+    Note that this function is agnostic about its inputs, as long as they
+    are sequences. Thus the metric can be computed for sequences of characters,
+    words, phrases, etc...
+
+    :returns f1_score, precision, recall
+
+    """
+
+    # if both are empty, this is a perfect match
+    if len(hyp) == 0 and len(ref) == 0:
+        return 1., 1., 1.
+
+    match_len = float(0)
+    hyp_len = float(len(hyp))
+    ref_len = float(len(ref))
+    for h_sym, r_sym in zip(hyp, ref):
+        if h_sym == r_sym:
+            match_len += 1.
+        else:
+            break
+
+    if match_len == 0:
+        return 0., 0., 0.
+
+    # ratio of characters in the prediction which are correct (low if prefix is too long)
+    precision = match_len / hyp_len
+
+    # ratio of coverage of the reference (low if prefix is too short)
+    recall = match_len / ref_len
+    return 2 * ((precision * recall) / (precision + recall)), precision, recall
+
+
+def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
+    """
+    Map a (source, reference) pair into (len(actual_reference) + 2) new examples
+
+    Assumes that users always want the empty prefix at the beginning of the generated examples
+    (i.e. ask the system for the full hypothesis) and the empty suffix (i.e. ask the system for nothing)
+    at the end of the generated examples
+
+    By passing None for bos_token or eos_token, user indicates that these tokens have already
+    been prepended or appended to the reference
+
+    """
+
+    start_index = 0
+    if bos_token is not None:
+        assert reference[0] == bos_token
+        start_index = 1
+
+    end_index = len(reference) + 1
+    if eos_token is not None:
+        assert reference[-1] == eos_token
+        end_index -= 1
+
+    prefixes, suffixes = zip(*[(reference[:i], reference[i:]) for i in range(start_index, end_index)])
+    sources = [source for _ in range(end_index - start_index)]
+
+    assert len(sources) == len(prefixes) == len(suffixes), 'All components must have the same length'
+
+    return zip(sources, prefixes, suffixes)
+
+
+
+
 def load_params_and_get_beam_search(exp_config, brick_delimiter=None):
 
     encoder = BidirectionalEncoder(
@@ -264,7 +335,7 @@ def load_params_and_get_beam_search(exp_config, brick_delimiter=None):
 
 # TODO: the predictor needs modes -- prefix prediction vs prediction from scratch
 # TODO: Another option would be to always pass a '0' prefix to keep the theano function interface the same
-class NMTPredictor:
+class IMTPredictor:
     """"Uses a trained NMT model to do prediction"""
 
     sutils = SamplingBase()
@@ -318,7 +389,12 @@ class NMTPredictor:
             sentence = sentence.split()
         return [index.get(w, unknown_token) for w in sentence]
 
-    def predict_file(self, input_file, output_file=None):
+# TODO: switch to predict files, like in multimodal_nmt, we need the reference here
+# also, because we need to create the input prefixes
+# TODO: also (optionally) output the reference suffix file from this function --
+# this will be useful for external validation,
+# otherwise, it will have to be re-created for validation
+    def predict_files(self, source_file, reference_file, output_file=None):
         tokenize = self.source_tokenizer_cmd is not None
         detokenize = self.detokenizer_cmd is not None
 
@@ -335,27 +411,50 @@ class NMTPredictor:
 
         # TODO: the tokenizer throws an error when the input file is opened with encoding='utf8'
         # why would this happen?
-        with codecs.open(input_file) as inp:
-            for i, line in enumerate(inp.read().strip().split('\n')):
-                logger.info("Translating segment: {}".format(i))
 
-                translations, costs = self.predict_segment(line, n_best=self.n_best,
-                                                           tokenize=tokenize, detokenize=detokenize)
+        # WORKING:
+        with codecs.open(source_file, encoding='utf8') as srcs:
+            with codecs.open(reference_file, encoding='utf8') as refs:
+                # map (source, ref) to [(source, prefix, suffix)]
+                source_lines = srcs.read().strip().split('\n')
+                ref_lines = refs.read().strip().split('\n')
+                assert len(source_lines) == len(ref_lines), 'Source and reference files must be the same length'
+                for i, instance in enumerate(zip(source_lines, ref_lines)):
+                    logger.info("Translating segment: {}".format(i))
 
-                # predict_segment returns a list of hyps, we just take the best one
-                nbest_translations = translations[:self.n_best]
-                nbest_costs = costs[:self.n_best]
+                    # TODO: tokenization is not currently implemented -- assumes whitespace tokenization!!!
+                    # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
+                    source_seq = instance[0].split()
+                    target_seq = instance[1].split()
 
-                if self.n_best == 1:
-                    ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
-                    total_cost += nbest_costs[0]
-                else:
-                    # one blank line to separate each nbest list
-                    ftrans.write('\n'.join(nbest_translations) + '\n\n')
-                    total_cost += sum(nbest_costs)
+                    # map to triples
+                    imt_triples = map_pair_to_imt_triples(source_seq, target_seq)
 
-                if i != 0 and i % 100 == 0:
-                    logger.info("Translated {} lines of test set...".format(i))
+                    # the first instance contains the empty prefix, the last instance contains the empty suffix
+                    # HACK: pop the first item until a fix for empty prefix is implemented
+                    imt_triples = imt_triples[1:]
+
+                    for src, prefix, suffix in imt_triples:
+
+                        # TODO: remove suffix from arglist of this function
+                        translations, costs = self.predict_segment(src, suffix, target_prefix=prefix,
+                                                                   n_best=self.n_best,
+                                                                   tokenize=tokenize, detokenize=detokenize)
+
+                        # predict_segment returns a list of hyps, we just take the best one
+                        nbest_translations = translations[:self.n_best]
+                        nbest_costs = costs[:self.n_best]
+
+                        if self.n_best == 1:
+                            ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
+                            total_cost += nbest_costs[0]
+                        else:
+                            # one blank line to separate each nbest list
+                            ftrans.write('\n'.join(nbest_translations) + '\n\n')
+                            total_cost += sum(nbest_costs)
+
+                    if i != 0 and i % 100 == 0:
+                        logger.info("Translated {} lines of test set...".format(i))
 
         logger.info("Saved translated output to: {}".format(ftrans.name))
         logger.info("Total cost of the test: {}".format(total_cost))
@@ -363,7 +462,8 @@ class NMTPredictor:
 
         return output_file
 
-    def predict_segment(self, segment, target_prefix=None, n_best=1, tokenize=False, detokenize=False):
+    # TODO: remove suffix from arglist of this function
+    def predict_segment(self, segment, suffix, target_prefix=None, n_best=1, tokenize=False, detokenize=False):
         """
         Do prediction for a single segment, which is a list of token idxs
 
@@ -381,7 +481,7 @@ class NMTPredictor:
 
         """
 
-        # TODO: if there is a prefix, we need to tokenize and preprocess it also
+        # if there is a prefix, we need to tokenize and preprocess it also
         # TODO: prefix can be a kwarg, but how to transparently create the Decoder?
         # TODO: probably the easiest way is just to always use the PartialSequenceGenerator for
         # TODO: decoders which are for prediction only
@@ -396,16 +496,23 @@ class NMTPredictor:
         segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
         segment += [self.src_eos_idx]
 
-        seq = NMTPredictor.sutils._oov_to_unk(
+        seq = IMTPredictor.sutils._oov_to_unk(
             segment, self.exp_config['src_vocab_size'], self.unk_idx)
         input_ = numpy.tile(seq, (self.exp_config['beam_size'], 1))
 
+        # TODO: HANDLE THE CASE WHERE TARGET PREFIX IS EMPTY
         if target_prefix is not None:
-            print(type(target_prefix))
             print('predicting target prefix: {}'.format(target_prefix))
             target_prefix = self.map_idx_or_unk(target_prefix, self.trg_vocab, self.unk_idx)
-            prefix_seq = NMTPredictor.sutils._oov_to_unk(
+            prefix_seq = IMTPredictor.sutils._oov_to_unk(
                 target_prefix, self.exp_config['trg_vocab_size'], self.unk_idx)
+
+            # TODO: remove suffix from this function -- put it outside
+            target_suffix = self.map_idx_or_unk(suffix, self.trg_vocab, self.unk_idx)
+            suffix_seq = IMTPredictor.sutils._oov_to_unk(
+                target_suffix, self.exp_config['trg_vocab_size'], self.unk_idx)
+
+
             prefix_input_ = numpy.tile(prefix_seq, (self.exp_config['beam_size'], 1))
             # draw sample, checking to ensure we don't get an empty string back
             trans, costs = \
@@ -434,26 +541,29 @@ class NMTPredictor:
         best_n_idxs = numpy.argsort(costs)[:n_best]
         for j, idx in enumerate(best_n_idxs):
             try:
-                trans_out = trans[idx]
+                trans_out_idxs = trans[idx]
                 cost = costs[idx]
 
                 # convert idx to words
                 # `line` is a tuple with one item
                 try:
-                    assert trans_out[-1] == self.trg_eos_idx, 'Target hypothesis should end with the EOS symbol'
-                    trans_out = trans_out[:-1]
-                    src_in = NMTPredictor.sutils._idx_to_word(segment, self.src_ivocab)
-                    trans_out = NMTPredictor.sutils._idx_to_word(trans_out, self.trg_ivocab)
+                    assert trans_out_idxs[-1] == self.trg_eos_idx, 'Target hypothesis should end with the EOS symbol'
+                    trans_out_idxs = trans_out_idxs[:-1]
+                    src_in = IMTPredictor.sutils._idx_to_word(segment, self.src_ivocab)
+                    trans_out = IMTPredictor.sutils._idx_to_word(trans_out_idxs, self.trg_ivocab)
                 except AssertionError as e:
-                    src_in = NMTPredictor.sutils._idx_to_word(segment, self.src_ivocab)
-                    trans_out = NMTPredictor.sutils._idx_to_word(trans_out, self.trg_ivocab)
+                    src_in = IMTPredictor.sutils._idx_to_word(segment, self.src_ivocab)
+                    trans_out = IMTPredictor.sutils._idx_to_word(trans_out_idxs, self.trg_ivocab)
                     logger.error("ERROR: {} does not end with the EOS symbol".format(trans_out))
                     logger.error("I'm continuing anyway...")
-            # TODO: why would this error happen?
             except ValueError:
                 logger.info("Can NOT find a translation for line: {}".format(src_in))
                 trans_out = '<UNK>'
                 cost = 0.
+
+            # compute score for trans_out_idxs and reference suffix
+            # TODO: move this outside of the predict_segment function!
+            imt_f1_score = imt_f1(trans_out_idxs, suffix_seq)
 
             if detokenize:
                 detokenizer = Popen(self.detokenizer_cmd, stdin=PIPE, stdout=PIPE)
@@ -466,6 +576,8 @@ class NMTPredictor:
 
             logger.info("Source: {}".format(src_in))
             logger.info("Target Hypothesis: {}".format(trans_out))
+            logger.info("Target Reference: {}".format(suffix))
+            logger.info("IMT F1 score: {}".format(imt_f1_score))
 
             best_n_hyps.append(trans_out)
             best_n_costs.append(cost)

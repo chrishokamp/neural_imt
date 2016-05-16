@@ -12,8 +12,7 @@ from machine_translation import configurations
 
 from nn_imt import main, IMTPredictor
 
-
-from machine_translation.stream import get_tr_stream, get_dev_stream
+from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ if __name__ == "__main__":
     # WORKING: set up IMT training
     # training examples are triples of (source, prefix, completion)
     # so references are now completions, not the complete reference
-    # THINKING: how to account for completions inside words? -- character NMT on target-side is the most satisfying,
+    # THINKING: how to account for completions when user is inside a word? -- character NMT on target-side is the most satisfying,
     # but is difficult to implement
 
     args = parser.parse_args()
@@ -49,8 +48,13 @@ if __name__ == "__main__":
 
     if mode == 'train':
         # Get data streams and call main
-        main(config_obj, get_tr_stream(**config_obj),
-             get_dev_stream(**config_obj), args.bokeh)
+        # TODO: switch to IMT datastreams
+        # TODO: validate that IMT datastreams still work with baseline training
+        training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
+        dev_stream = get_dev_stream_with_prefixes(**config_obj)
+
+        main(config_obj, training_stream, dev_stream, args.bokeh)
+
     elif mode == 'predict':
         predictor = IMTPredictor(config_obj)
 

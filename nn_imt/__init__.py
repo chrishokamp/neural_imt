@@ -42,6 +42,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# WORKING: train IMT with validation using BLEU/METEOR on suffix
+# WORKING: remember to cut the suffix to only one EOS token
 def main(config, tr_stream, dev_stream, use_bokeh=False):
 
     # Create Theano variables
@@ -51,6 +53,8 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
     target_sentence = tensor.lmatrix('target')
     target_sentence_mask = tensor.matrix('target_mask')
     sampling_input = tensor.lmatrix('input')
+
+    # TODO: add prefix variable
 
     # Construct model
     logger.info('Building RNN encoder-decoder')
@@ -67,6 +71,8 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
     cg = ComputationGraph(cost)
 
     # Initialize model
+    # TODO: switch to prefix decoding decoder
+
     logger.info('Initializing model')
     encoder.weights_init = decoder.weights_init = IsotropicGaussian(
         config['weight_scale'])
@@ -88,7 +94,7 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
         cg = apply_dropout(cg, dropout_inputs, config['dropout'])
 
     # Apply weight noise for regularization
-    if config['weight_noise_ff'] > 0.0:
+    if config.get('weight_noise_ff', None) > 0.0:
         logger.info('Applying weight noise to ff layers')
         enc_params = Selector(encoder.lookup).get_parameters().values()
         enc_params += Selector(encoder.fwd_fork).get_parameters().values()
@@ -138,7 +144,6 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
 
 
     # Set up beam search and sampling computation graphs if necessary
-
     if config['hook_samples'] >= 1 or config['bleu_script'] is not None:
         logger.info("Building sampling model")
         sampling_representation = encoder.apply(
@@ -160,6 +165,7 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
                     src_vocab_size=config['src_vocab_size']))
 
     # Add early stopping based on bleu
+    # TODO: add IMT meteor early stopping
     if config['bleu_script'] is not None:
         logger.info("Building bleu validator")
         extensions.append(
@@ -167,6 +173,9 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
                           model=search_model, data_stream=dev_stream,
                           normalize=config['normalized_bleu'],
                           every_n_batches=config['bleu_val_freq']))
+
+
+    # TODO: add IMT BLEU early stopping
 
     # Reload model if necessary
     if config['reload']:
@@ -185,13 +194,15 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
         algorithm = GradientDescent(
             cost=cg.outputs[0], parameters=cg.parameters,
             step_rule=CompositeRule([StepClipping(config['step_clipping']),
-                                     eval(config['step_rule'])()])
+                                     eval(config['step_rule'])()]),
+            on_unused_sources='warn'
         )
     else:
         algorithm = GradientDescent(
             cost=cost, parameters=cg.parameters,
             step_rule=CompositeRule([StepClipping(config['step_clipping']),
-                                     eval(config['step_rule'])()])
+                                     eval(config['step_rule'])()]),
+            on_unused_sources='warn'
         )
 
     # enrich the logged information

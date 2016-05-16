@@ -68,6 +68,9 @@ def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
     By passing None for bos_token or eos_token, user indicates that these tokens have already
     been prepended or appended to the reference
 
+    Note: may want to refactor this into a function which takes just the target and returns (prefix, suffix) pairs
+    for more flexibility
+
     """
 
     start_index = 0
@@ -206,7 +209,6 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     stream = Unpack(stream)
 
     # Now make a very big batch that we can shuffle
-    # TODO: let user configure the size of this shuffle batch
     # Build a batched version of stream to read k batches ahead
     shuffle_batch_size = kwargs['shuffle_batch_size']
     stream = Batch(stream,
@@ -242,40 +244,44 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     return masked_stream, src_vocab, trg_vocab
 
 
-
 # # Remember that the BleuValidator does hackish stuff to get target set information from the main_loop data_stream
 # # using all kwargs here makes it more clear that this function is always called with get_dev_stream(**config_dict)
-# TODO: implement dev IMT data stream
-# def get_dev_stream_with_context_features(val_context_features=None, val_set=None, src_vocab=None,
-#                                          src_vocab_size=30000, unk_id=1, **kwargs):
-#     """Setup development set stream if necessary."""
-#
-#     def _get_np_array(filename):
-#         return numpy.load(filename)['arr_0']
-#
-#
-#     dev_stream = None
-#     if val_set is not None and src_vocab is not None:
-#         src_vocab = _ensure_special_tokens(
-#             src_vocab if isinstance(src_vocab, dict) else
-#             cPickle.load(open(src_vocab)),
-#             bos_idx=0, eos_idx=src_vocab_size - 1, unk_idx=unk_id)
-#
-#         # TODO: how is the dev dataset used without the context features?
-#         dev_dataset = TextFile([val_set], src_vocab, None)
-#
-#         # now add the source with the image features
-#         # create the image datastream (iterate over a file line-by-line)
-#         con_features = _get_np_array(val_context_features)
-#         con_feature_dataset = IterableDataset(con_features)
-#         valid_image_stream = DataStream(con_feature_dataset)
-#
-#         # dev_stream = DataStream(dev_dataset)
-#         dev_stream = Merge([dev_dataset.get_example_stream(),
-#                             valid_image_stream], ('source', 'initial_context'))
-#     #         dev_stream = dev_stream.get_example_stream()
-#
-#     return dev_stream
-#
-#
+# TODO: test dev IMT data stream
+def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab=None, src_vocab_size=30000,
+                                         trg_vocab=None, trg_vocab_size=30000, unk_id=1, **kwargs):
+    """Setup development set stream if necessary."""
+
+    dev_stream = None
+    if val_set is not None and val_set_grndtruth is not None:
+        src_vocab = _ensure_special_tokens(
+            src_vocab if isinstance(src_vocab, dict) else
+            cPickle.load(open(src_vocab)),
+            bos_idx=0, eos_idx=src_vocab_size - 1, unk_idx=unk_id)
+
+        trg_vocab = _ensure_special_tokens(
+            trg_vocab if isinstance(trg_vocab, dict) else
+            cPickle.load(open(trg_vocab)),
+            bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
+
+        dev_source_dataset = TextFile([val_set], src_vocab, None)
+        dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab, None)
+
+        dev_stream = Merge([dev_source_dataset.get_example_stream(),
+                            dev_target_dataset.get_example_stream()],
+                           ('source', 'target'))
+
+        # now add prefix and suffixes to this stream
+        dev_stream = Mapping(dev_stream, PrefixSuffixStreamTransformer(),
+                         add_sources=('target_prefix', 'target_suffix'))
+
+        dev_stream = Mapping(dev_stream, CopySourceAndTargetToMatchPrefixes(dev_stream))
+
+        # changing stream.produces_examples is a little hack which lets us use Unpack to flatten
+        dev_stream.produces_examples = False
+        # flatten the stream back out into (source, target, target_prefix, target_suffix)
+        dev_stream = Unpack(dev_stream)
+
+    return dev_stream
+
+
 

@@ -213,77 +213,6 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
 
 
 
-# TODO: move evaluation functions to separate module
-# TODO: update users of this function to new return tuple format
-def imt_f1(hyp, ref):
-    """
-    compute Ueffing and Ney F1 for IMT
-
-    Note that this function is agnostic about its inputs, as long as they
-    are sequences. Thus the metric can be computed for sequences of characters,
-    words, phrases, etc...
-
-    :returns f1_score, precision, recall
-
-    """
-
-    # if both are empty, this is a perfect match
-    if len(hyp) == 0 and len(ref) == 0:
-        return 1., 1., 1.
-
-    match_len = float(0)
-    hyp_len = float(len(hyp))
-    ref_len = float(len(ref))
-    for h_sym, r_sym in zip(hyp, ref):
-        if h_sym == r_sym:
-            match_len += 1.
-        else:
-            break
-
-    if match_len == 0:
-        return 0., 0., 0.
-
-    # ratio of characters in the prediction which are correct (low if prefix is too long)
-    precision = match_len / hyp_len
-
-    # ratio of coverage of the reference (low if prefix is too short)
-    recall = match_len / ref_len
-    return 2 * ((precision * recall) / (precision + recall)), precision, recall
-
-
-def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
-    """
-    Map a (source, reference) pair into (len(actual_reference) + 2) new examples
-
-    Assumes that users always want the empty prefix at the beginning of the generated examples
-    (i.e. ask the system for the full hypothesis) and the empty suffix (i.e. ask the system for nothing)
-    at the end of the generated examples
-
-    By passing None for bos_token or eos_token, user indicates that these tokens have already
-    been prepended or appended to the reference
-
-    """
-
-    start_index = 0
-    if bos_token is not None:
-        assert reference[0] == bos_token
-        start_index = 1
-
-    end_index = len(reference) + 1
-    if eos_token is not None:
-        assert reference[-1] == eos_token
-        end_index -= 1
-
-    prefixes, suffixes = zip(*[(reference[:i], reference[i:]) for i in range(start_index, end_index)])
-    sources = [source for _ in range(end_index - start_index)]
-
-    assert len(sources) == len(prefixes) == len(suffixes), 'All components must have the same length'
-
-    return zip(sources, prefixes, suffixes)
-
-
-
-
 def load_params_and_get_beam_search(exp_config, brick_delimiter=None):
 
     encoder = BidirectionalEncoder(
@@ -336,7 +265,7 @@ def load_params_and_get_beam_search(exp_config, brick_delimiter=None):
 # TODO: the predictor needs modes -- prefix prediction vs prediction from scratch
 # TODO: Another option would be to always pass a '0' prefix to keep the theano function interface the same
 class IMTPredictor:
-    """"Uses a trained NMT model to do prediction"""
+    """"Uses a trained NMT model to do IMT prediction -- prediction where input includes a prefix"""
 
     sutils = SamplingBase()
 

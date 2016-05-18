@@ -26,12 +26,13 @@ from blocks_extras.extensions.plot import Plot
 from machine_translation.checkpoint import CheckpointNMT, LoadNMT
 from machine_translation.model import BidirectionalEncoder
 
-# TODO: these will break during training
-from machine_translation.sampling import BleuValidator, Sampler, SamplingBase
-from machine_translation.stream import (get_tr_stream, get_dev_stream,
-                                        _ensure_special_tokens)
+# TODO: these will break during training -- implement them for IMT
+from machine_translation.stream import _ensure_special_tokens
 
-from nn_imt.model import Decoder
+from nn_imt.sample import BleuValidator, Sampler, SamplingBase
+from nn_imt.model import NMTPrefixDecoder
+from nn_imt.stream import map_pair_to_imt_triples
+from nn_imt.stream import imt_f1
 
 try:
     from blocks_extras.extensions.plot import Plot
@@ -43,26 +44,77 @@ logger = logging.getLogger(__name__)
 
 
 # WORKING: train IMT with validation using BLEU/METEOR on suffix
-# WORKING: remember to cut the suffix to only one EOS token
-def main(config, tr_stream, dev_stream, use_bokeh=False):
+# WORKING: remember to cut the suffix for validation to only one EOS token
+# WORKING: the BLEU validator may already do this
+def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
     # Create Theano variables
     logger.info('Creating theano variables')
     source_sentence = tensor.lmatrix('source')
     source_sentence_mask = tensor.matrix('source_mask')
-    target_sentence = tensor.lmatrix('target')
-    target_sentence_mask = tensor.matrix('target_mask')
-    sampling_input = tensor.lmatrix('input')
+
+    # Note that the _names_ are changed from normal NMT
+    # for IMT training, we use only the suffix as the reference
+    target_sentence = tensor.lmatrix('target_suffix')
+    target_sentence_mask = tensor.matrix('target_suffix_mask')
+    # TODO: change names back to *_suffix, there is currently a theano function name error
+    # TODO: in the GradientDescent Algorithm
+
+    target_prefix = tensor.lmatrix('target_prefix')
+    target_prefix_mask = tensor.matrix('target_prefix_mask')
+
 
     # TODO: add prefix variable
+    # if exp_config.get('prefix_decoding', False):
+    #     decoder = Decoder(
+    #         exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
+    #         exp_config['enc_nhids'] * 2, loss_function='min_risk')
+    #     # TODO: should we change the variable name for clarity?
+    #     sampling_prefix = tensor.lmatrix('target')
+    #     generated = decoder.generate(sampling_input, sampling_representation,
+    #                                  target_prefix=sampling_prefix)
+    # else:
+    #     sampling_prefix = None
+    #     decoder = Decoder(
+    #         exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
+    #         exp_config['enc_nhids'] * 2)
+    #     generated = decoder.generate(sampling_input, sampling_representation)
+    #
+    # _, samples = VariableFilter(
+    #     bricks=[decoder.sequence_generator], name="outputs")(
+    #     ComputationGraph(generated[1]))  # generated[1] is next_outputs
+    # beam_search = BeamSearch(samples=samples)
+
+    # Set the parameters
+    # logger.info("Creating Model...")
+    # model = Model(generated)
+    # logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))
+
+    # load the parameter values from an .npz file
+    # param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=brick_delimiter)
+    # LoadNMT.set_model_parameters(model, param_values)
+
 
     # Construct model
     logger.info('Building RNN encoder-decoder')
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
-    decoder = Decoder(
+
+    # TODO: switch to prefix decoding decoder
+    # TODO: remove overloading of `loss_function` -- IMT should do prefix decoding by default
+    decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
-        config['enc_nhids'] * 2)
+        config['enc_nhids'] * 2, loss_function='min_risk')
+
+    # rename to match baseline NMT systems
+    decoder.name = 'decoder'
+
+    # TODO: change the name of `target_sentence` to `target_suffix` for more clarity
+    # cost = decoder.cost(
+    #     encoder.apply(source_sentence, source_sentence_mask),
+    #     source_sentence_mask, target_sentence, target_sentence_mask,
+    #     target_prefix, target_prefix_mask)
+    # TODO: update this signature for IMT
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask, target_sentence, target_sentence_mask)
@@ -70,9 +122,7 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
     logger.info('Creating computational graph')
     cg = ComputationGraph(cost)
 
-    # Initialize model
-    # TODO: switch to prefix decoding decoder
-
+    # INITIALIZATION
     logger.info('Initializing model')
     encoder.weights_init = decoder.weights_init = IsotropicGaussian(
         config['weight_scale'])
@@ -107,6 +157,8 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
         cg = apply_noise(cg, enc_params+dec_params, config['weight_noise_ff'])
 
     # TODO: weight noise for recurrent params isn't currently implemented -- see config['weight_noise_rec']
+    # TODO: fixed dropout mask for recurrent params?
+
     # Print shapes
     shapes = [param.get_value().shape for param in cg.parameters]
     logger.info("Parameter shapes: ")
@@ -144,38 +196,38 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
 
 
     # Set up beam search and sampling computation graphs if necessary
-    if config['hook_samples'] >= 1 or config['bleu_script'] is not None:
-        logger.info("Building sampling model")
-        sampling_representation = encoder.apply(
-            sampling_input, tensor.ones(sampling_input.shape))
-        # TODO: the generated output actually contains several more values, ipdb to see what they are
-        generated = decoder.generate(sampling_input, sampling_representation)
-        search_model = Model(generated)
-        _, samples = VariableFilter(
-            bricks=[decoder.sequence_generator], name="outputs")(
-            ComputationGraph(generated[1]))  # generated[1] is next_outputs
+    # TODO: Sampling for IMT -- include target prefix in graph
+    # TODO: uncomment once model is working
+    # WORKING: switch to getting samples and beam_search from function
 
-    # Add sampling
+
+    # Theano variables for the sampling graph
+    sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
+    beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
+
     if config['hook_samples'] >= 1:
         logger.info("Building sampler")
         extensions.append(
             Sampler(model=search_model, data_stream=tr_stream,
                     hook_samples=config['hook_samples'],
                     every_n_batches=config['sampling_freq'],
+                    src_vocab=source_vocab,
+                    trg_vocab=target_vocab,
                     src_vocab_size=config['src_vocab_size']))
 
     # Add early stopping based on bleu
-    # TODO: add IMT meteor early stopping
+    # TODO: add IMT BLEU early stopping with prefix
     if config['bleu_script'] is not None:
         logger.info("Building bleu validator")
         extensions.append(
-            BleuValidator(sampling_input, samples=samples, config=config,
+            BleuValidator(sampling_input, sampling_prefix, samples=samples, config=config,
                           model=search_model, data_stream=dev_stream,
+                          src_vocab=source_vocab,
+                          trg_vocab=target_vocab,
                           normalize=config['normalized_bleu'],
                           every_n_batches=config['bleu_val_freq']))
 
-
-    # TODO: add IMT BLEU early stopping
+    # TODO: add IMT meteor early stopping
 
     # Reload model if necessary
     if config['reload']:
@@ -223,55 +275,57 @@ def main(config, tr_stream, dev_stream, use_bokeh=False):
     main_loop.run()
 
 
+# TODO: use this function in training as well (at least for sampling and validation components)
+# TODO: to get the pieces we need to setup the graphs
+# TODO: break this function into
+def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None):
 
-def load_params_and_get_beam_search(exp_config, brick_delimiter=None):
+    if encoder is None:
+        encoder = BidirectionalEncoder(
+            exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
 
-    encoder = BidirectionalEncoder(
-        exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
-
+    # TODO: remove the 'loss_function' param, it's not needed for prediction
+    # TODO: remove 'prefix_decoding' from IMT config -- this is the purpose of IMT
+    # Note: decoder should be None when we are just doing prediction, not validation
+    if decoder is None:
+        decoder = NMTPrefixDecoder(
+            exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
+            exp_config['enc_nhids'] * 2, loss_function='min_risk')
+        # rename to match baseline NMT systems
+        decoder.name = 'decoder'
 
     # Create Theano variables
     logger.info('Creating theano variables')
-    sampling_input = tensor.lmatrix('source')
+    sampling_input = tensor.lmatrix('sampling_input')
+    sampling_prefix = tensor.lmatrix('sampling_target_prefix')
 
     # Get beam search
     logger.info("Building sampling model")
-    sampling_representation = encoder.apply(
-        sampling_input, tensor.ones(sampling_input.shape))
+    sampling_representation = encoder.apply(sampling_input, tensor.ones(sampling_input.shape))
 
-    # TODO: how to determine the type of decoder that we need?
-    # TODO: i.e. how to make prefix decoding configurable when building the decoder?
-    # TODO: remove the 'loss_function' param, it's not needed for prediction
-    if exp_config.get('prefix_decoding', False):
-        decoder = Decoder(
-            exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-            exp_config['enc_nhids'] * 2, loss_function='min_risk')
-        # TODO: should we change the variable name for clarity?
-        sampling_prefix = tensor.lmatrix('target')
-        generated = decoder.generate(sampling_input, sampling_representation,
-                                     target_prefix=sampling_prefix)
-    else:
-        sampling_prefix = None
-        decoder = Decoder(
-            exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-            exp_config['enc_nhids'] * 2)
-        generated = decoder.generate(sampling_input, sampling_representation)
+    # Note: prefix can be empty if we want to simulate baseline NMT
+    generated = decoder.generate(sampling_input, sampling_representation,
+                                 target_prefix=sampling_prefix)
 
+    # create the 1-step sampling graph
     _, samples = VariableFilter(
         bricks=[decoder.sequence_generator], name="outputs")(
         ComputationGraph(generated[1]))  # generated[1] is next_outputs
+
+    # set up beam search
     beam_search = BeamSearch(samples=samples)
 
-    # Set the parameters
-    logger.info("Creating Model...")
-    model = Model(generated)
-    logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))
+    logger.info("Creating Search Model...")
+    search_model = Model(generated)
 
-    # load the parameter values from an .npz file
-    param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=brick_delimiter)
-    LoadNMT.set_model_parameters(model, param_values)
+    # optionally set beam search model parameter values from an .npz file
+    # Note: we generally would set the model params in this way when doing only prediction/evaluation
+    if exp_config.get('load_from_saved_parameters', False):
+        logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))
+        param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=brick_delimiter)
+        LoadNMT.set_model_parameters(model, param_values)
 
-    return beam_search, sampling_input, sampling_prefix
+    return beam_search, search_model, samples, sampling_input, sampling_prefix
 
 # TODO: the predictor needs modes -- prefix prediction vs prediction from scratch
 # TODO: Another option would be to always pass a '0' prefix to keep the theano function interface the same
@@ -342,7 +396,7 @@ class IMTPredictor:
             ftrans = codecs.open(output_file, 'wb', encoding='utf8')
         else:
             # cut off the language suffix to make output file name
-            output_file = '.'.join(input_file.split('.')[:-1]) + '.trans.out'
+            output_file = '.'.join(source_file.split('.')[:-1]) + '.trans.out'
             ftrans = codecs.open(output_file, 'wb', encoding='utf8')
 
         logger.info("Started translation, will output {} translations for each segment"
@@ -461,7 +515,6 @@ class IMTPredictor:
                                   self.target_sampling_input: prefix_input_},
                     max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
                     ignore_first_eol=True)
-            # import ipdb;ipdb.set_trace()
 
         else:
             # draw sample, checking to ensure we don't get an empty string back

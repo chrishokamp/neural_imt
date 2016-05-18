@@ -13,6 +13,7 @@ from machine_translation import configurations
 from nn_imt import main, IMTPredictor
 
 from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes
+from nn_imt.sample import SamplingBase
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -53,7 +54,25 @@ if __name__ == "__main__":
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
         dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
-        main(config_obj, training_stream, dev_stream, args.bokeh)
+        # WORKING: write the reference suffixes from the dev stream to a file, reset config['val_set_grndtruth'] to
+        # WORKING: this file
+        trg_ivocab = {v: k for k, v in trg_vocab.items()}
+        suffix_ref_filename = config_obj['val_set_out']+'.reference_suffixes'
+        sampling_base = SamplingBase()
+        with codecs.open(suffix_ref_filename, 'w') as suffix_refs:
+            for l in list(dev_stream.get_epoch_iterator()):
+                # currently our datastream is (source,target,prefix,suffix)
+                suffix = l[-1]
+                suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
+                # TODO: remove this hack once suffixes are created properly
+                # TODO: the first suffix should include the BOS token?
+                if len(suffix_text) == 0:
+                    suffix_text = '</S>'
+                suffix_refs.write(suffix_text + '\n')
+
+        config_obj['val_set_grndtruth'] = suffix_ref_filename
+
+        main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
 
     elif mode == 'predict':
         predictor = IMTPredictor(config_obj)

@@ -122,7 +122,11 @@ class PrefixSuffixStreamTransformer:
 
         # TODO: we need to pass through the information about BOS and EOS tokens
         # TODO: there is wasted computation here, since we will need to flatten the sources back out again later
-        sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference))
+        sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference, **kwargs))
+
+        # Note: the cast here is important, otherwise these will become float64s which will break everything
+        target_prefixes = [numpy.array(pre).astype('int64') for pre in target_prefixes]
+        target_suffixes = [numpy.array(suf).astype('int64') for suf in target_suffixes]
 
         return (target_prefixes, target_suffixes)
 

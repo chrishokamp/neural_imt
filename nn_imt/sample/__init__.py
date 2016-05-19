@@ -159,10 +159,12 @@ class Sampler(SimpleExtension, SamplingBase):
         src_batch = batch[self.main_loop.data_stream.mask_sources[0]]
         trg_batch = batch[self.main_loop.data_stream.mask_sources[1]]
         prefix_batch = batch[self.main_loop.data_stream.mask_sources[2]]
+        suffix_batch = batch[self.main_loop.data_stream.mask_sources[3]]
 
         input_ = src_batch[sample_idx, :]
         target_ = trg_batch[sample_idx, :]
         prefix_ = prefix_batch[sample_idx, :]
+        suffix_ = suffix_batch[sample_idx, :]
 
         # Sample
         print()
@@ -184,7 +186,9 @@ class Sampler(SimpleExtension, SamplingBase):
 
             print("Input : ", self._idx_to_word(input_[i][:input_length],
                                                 self.src_ivocab))
-            print("Target: ", self._idx_to_word(target_[i][:target_length],
+            print("Prefix: ", self._idx_to_word(prefix_[i][:target_length],
+                                                self.trg_ivocab))
+            print("Suffix: ", self._idx_to_word(suffix_[i][:target_length],
                                                 self.trg_ivocab))
             print("Sample: ", self._idx_to_word(outputs[:sample_length],
                                                 self.trg_ivocab))
@@ -287,10 +291,10 @@ class BleuValidator(SimpleExtension, SamplingBase):
                 line[0], self.config['src_vocab_size'], self.unk_idx)
 
             target_prefix = line[2]
-            print(target_prefix)
+            # print(target_prefix)
             # TODO: remove this hack once we force prefixes and suffixes to never be empty
-            if len(target_prefix) == 0:
-                target_prefix = [self.trg_vocab['<UNK>']]
+            # if len(target_prefix) == 0:
+            #     target_prefix = [self.trg_vocab['<UNK>']]
 
             input_ = numpy.tile(seq, (self.config['beam_size'], 1))
             prefix_input_ = numpy.tile(target_prefix, (self.config['beam_size'], 1))
@@ -326,7 +330,6 @@ class BleuValidator(SimpleExtension, SamplingBase):
                 if j == 0:
                     # Write to subprocess and file if it exists
                     print(trans_out, file=mb_subprocess.stdin)
-                    print(trans_out)
                     if self.verbose:
                         print(trans_out, file=ftrans)
 
@@ -360,7 +363,7 @@ class BleuValidator(SimpleExtension, SamplingBase):
 
     def _is_valid_to_save(self, bleu_score):
         if not self.best_models or min(self.best_models,
-                                       key=operator.attrgetter('bleu_score')).bleu_score < bleu_score:
+                                       key=operator.attrgetter('score')).bleu_score < bleu_score:
             return True
         return False
 
@@ -590,16 +593,3 @@ class ModelInfo:
         return gen_path
 
 
-# TODO: remove this old code once Meteor min-risk MMMT is working
-# class ModelInfo:
-#     """Utility class to keep track of evaluated models."""
-#
-#     def __init__(self, bleu_score, path=None):
-#         self.bleu_score = bleu_score
-#         self.path = self._generate_path(path)
-#
-#     def _generate_path(self, path):
-#         gen_path = os.path.join(
-#             path, 'best_bleu_model_%d_BLEU%.2f.npz' %
-#                   (int(time.time()), self.bleu_score) if path else None)
-#         return gen_path

@@ -43,9 +43,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# WORKING: fix the IMT datastream to include <S> and </S> so prefixes and suffixes are never empty
 # WORKING: train IMT with validation using BLEU/METEOR on suffix
 # WORKING: remember to cut the suffix for validation to only one EOS token
-# WORKING: the BLEU validator may already do this
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
     # Create Theano variables
@@ -115,9 +115,11 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     #     source_sentence_mask, target_sentence, target_sentence_mask,
     #     target_prefix, target_prefix_mask)
     # TODO: update this signature for IMT
+    # WORKING HERE -- compute cost using the target prefix directly
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
-        source_sentence_mask, target_sentence, target_sentence_mask)
+        source_sentence_mask, target_sentence, target_sentence_mask,
+        target_prefix, target_prefix_mask)
 
     logger.info('Creating computational graph')
     cg = ComputationGraph(cost)
@@ -194,13 +196,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                       every_n_batches=config['save_freq'])
     ]
 
-
-    # Set up beam search and sampling computation graphs if necessary
-    # TODO: Sampling for IMT -- include target prefix in graph
-    # TODO: uncomment once model is working
-    # WORKING: switch to getting samples and beam_search from function
-
-
+    # Set up the sampling graph for validation during training
     # Theano variables for the sampling graph
     sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
@@ -426,7 +422,7 @@ class IMTPredictor:
 
                     # the first instance contains the empty prefix, the last instance contains the empty suffix
                     # HACK: pop the first item until a fix for empty prefix is implemented
-                    imt_triples = imt_triples[1:]
+                    # imt_triples = imt_triples[1:]
 
                     for src, prefix, suffix in imt_triples:
 

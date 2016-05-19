@@ -51,6 +51,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         super(PartialSequenceGenerator, self).__init__(
             readout, transition, **kwargs)
 
+    # Note: this function is only used by self.generate, because it has the recurrent decorator
+    # Note: it's not used in the cost computation
     @application
     def initial_states(self, batch_size, *args, **kwargs):
         """
@@ -131,7 +133,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     # Idea: the initial states of Attention Recurrent can be overridden for our purposes see :757 of bricks.attention
 
     @application
-    def cost_matrix(self, application_call, outputs, mask=None, **kwargs):
+    def cost_matrix(self, application_call, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns word-level cross-entropy generation costs for output sequences, conditioned
         upon both the source sequence, and a target prefix
 
@@ -143,29 +145,57 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # We assume the data has axes (time, batch, features, ...)
         batch_size = outputs.shape[1]
 
-        # Prepare input for the iterative part
-        states = dict_subset(kwargs, self._state_names, must_have=False)
-
+        # WORKING: run the recurrent transition twice -- use the new version of attention recurrent with
+        # WORKING: configurable initial states
         # TODO: remember the target_prefix_mask -- we _MUST_ account for this in the initial state computation
         # TODO: run the model through the target prefix, then init the model with the correct states
+
+        prefix_feedback = self.readout.feedback(prefix_outputs)
+        prefix_inputs = self.fork.apply(prefix_feedback, as_dict=True)
+
+        # Prepare input for the iterative part
+        # TODO: we're not passing any state names, how are they actually used?
+        states = dict_subset(kwargs, self._state_names, must_have=False)
 
         # masks in context are optional (e.g. `attended_mask`)
         contexts = dict_subset(kwargs, self._context_names, must_have=False)
 
-        if 'target_prefix' in kwargs:
-            # first run the recurrent transition for the target_prefix, then use the final states from the
-            # prefix to initialize the transition to compute the cost
-            pass
+        # first run the recurrent transition for the target_prefix, then use the final states from the
+        # Run the recurrent network for the prefix
+        prefix_results = self.transition.apply(
+            mask=prefix_mask, return_initial_states=True, as_dict=True,
+            **dict_union(prefix_inputs, states, contexts))
 
-        # add the target prefix to the contexts, the PartialSequenceGenerator will find this via the kwargs
-        # contexts['target_prefix'] = kwargs['target_prefix']
+        # WORKING: get the prefix representation which we will use to init the suffix
+        # Separate the deliverables. The last states are discarded: they
+        # are not used to predict any output symbol. The initial glimpses
+        # are discarded because they are not used for prediction.
+        # Remember, glimpses are computed _before_ output stage, states are
+        # computed after.
 
+        # TODO: ensure that the order of all of the initial states is correct
+        # TODO: does this make sense for the initial glimpses? these are the glimpses we used
+        # TODO: to compute the last word of the prefix
+        # TODO: what about the mask?
+        prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
+
+        # TODO: are these in the same order as attention.initial_glimpses -- YES
+        # attention.initial_glimpses order:
+        # @application(outputs=['weighted_averages', 'weights'])
+
+        prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
+        import ipdb;ipdb.set_trace()
+
+        # Now compute the suffix representation, and use the prefix initial states to init the recurrent transition
         feedback = self.readout.feedback(outputs)
         inputs = self.fork.apply(feedback, as_dict=True)
 
         # Run the recurrent network
+        # TODO: test that initial states and glimpses are correct
         results = self.transition.apply(
             mask=mask, return_initial_states=True, as_dict=True,
+            initial_states=prefix_initial_states,
+            initial_glimpses=prefix_initial_glimpses,
             **dict_union(inputs, states, contexts))
 
         # Separate the deliverables. The last states are discarded: they
@@ -173,10 +203,13 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # are discarded because they are not used for prediction.
         # Remember, glimpses are computed _before_ output stage, states are
         # computed after.
+
         states = {name: results[name][:-1] for name in self._state_names}
         glimpses = {name: results[name][1:] for name in self._glimpse_names}
+        import ipdb;ipdb.set_trace()
 
         # Compute the cost
+        # TODO: may need to change `readout.initial_outputs` to the last element of the prefix?
         feedback = tensor.roll(feedback, 1, 0)
         feedback = tensor.set_subtensor(
             feedback[0],
@@ -215,15 +248,25 @@ class InitialStateAttentionRecurrent(AttentionRecurrent):
         """
         Allow user to either pass initial states, or pass through to default behavior
         """
+        # TODO: test that we're getting the right initial states from cost_matrix
         if 'initial_states' in kwargs and 'initial_glimpses' in kwargs:
+            # TODO: pop these out of the AttentionRecurrent kwargs in the same way as mmmt
+
             transition_initial_states = kwargs.pop('initial_states')
             attention_initial_glimpses = kwargs.pop('initial_glimpses')
-            return (pack(transition_initial_states) + pack(attention_initial_glimpses))
+            initial_states = (pack(transition_initial_states) + pack(attention_initial_glimpses))
+            # WORKING: all the initial states arent here, how many do we need?
         else:
-            return (pack(self.transition.initial_states(
-                         batch_size, **kwargs)) +
-                    pack(self.attention.initial_glimpses(
-                         batch_size, kwargs[self.attended_name])))
+            initial_states = (pack(self.transition.initial_states(batch_size, **kwargs)) +
+                              pack(self.attention.initial_glimpses(batch_size, kwargs[self.attended_name])))
+
+            # WORKING: what are the types of the initial states?
+            # provided from cost_matrix:
+            # [Subtensor{int64}.0, Subtensor{int64}.0, Subtensor{int64}.0]
+
+        import ipdb;ipdb.set_trace()
+
+        return initial_states
 
     @initial_states.property('outputs')
     def initial_states_outputs(self):
@@ -328,21 +371,25 @@ class NMTPrefixDecoder(Initializable):
 
         self.children = [self.sequence_generator]
 
+    # WORKING: add the target prefix and target prefix mask to the cost computation
     @application(inputs=['representation', 'source_sentence_mask',
-                         'target_sentence_mask', 'target_sentence'],
+                         'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
                  outputs=['cost'])
     def cost(self, representation, source_sentence_mask,
-             target_sentence, target_sentence_mask):
+             target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
 
         source_sentence_mask = source_sentence_mask.T
         target_sentence = target_sentence.T
         target_sentence_mask = target_sentence_mask.T
-        # TODO: check the transpose for the target_prefix and the target_prefix_mask
+        target_prefix = target_prefix.T
+        target_prefix_mask = target_prefix_mask.T
 
         # Get the cost matrix
         cost = self.sequence_generator.cost_matrix(**{
             'mask': target_sentence_mask,
             'outputs': target_sentence,
+            'prefix_mask': target_prefix_mask,
+            'prefix_outputs': target_prefix,
             'attended': representation,
             'attended_mask': source_sentence_mask,
         }
@@ -366,7 +413,6 @@ class NMTPrefixDecoder(Initializable):
     # TODO: check the transpose of the target_prefix_mask
     @application
     def generate(self, source_sentence, representation, **kwargs):
-        print(kwargs)
         return self.sequence_generator.generate(
             n_steps=2 * source_sentence.shape[1],
             batch_size=source_sentence.shape[0],

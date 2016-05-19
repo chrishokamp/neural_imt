@@ -1,17 +1,8 @@
 import numpy
 
-from fuel.datasets import IterableDataset
-from fuel.transformers import Merge
-from fuel.streams import DataStream
-from fuel.datasets import TextFile
-from fuel.schemes import ConstantScheme
-from fuel.streams import DataStream
-from fuel.transformers import (
-    Merge, Batch, Filter, Padding, SortMapping, Unpack, Mapping)
 import numpy
 from fuel.datasets import TextFile
 from fuel.schemes import ConstantScheme
-from fuel.streams import DataStream
 from fuel.transformers import (
     Merge, Batch, Filter, Padding, SortMapping, Unpack, Mapping, Transformer, SourcewiseTransformer)
 
@@ -74,13 +65,11 @@ def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
     """
 
     start_index = 0
-    if bos_token is not None:
-        assert reference[0] == bos_token
+    if bos_token:
         start_index = 1
 
     end_index = len(reference) + 1
-    if eos_token is not None:
-        assert reference[-1] == eos_token
+    if eos_token:
         end_index -= 1
 
     prefixes, suffixes = zip(*[(reference[:i], reference[i:]) for i in range(start_index, end_index)])
@@ -122,7 +111,10 @@ class PrefixSuffixStreamTransformer:
 
         # TODO: we need to pass through the information about BOS and EOS tokens
         # TODO: there is wasted computation here, since we will need to flatten the sources back out again later
-        sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference, **kwargs))
+        sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference,
+                                                                                 bos_token=True,
+                                                                                 eos_token=True,
+                                                                                 **kwargs))
 
         # Note: the cast here is important, otherwise these will become float64s which will break everything
         target_prefixes = [numpy.array(pre).astype('int64') for pre in target_prefixes]
@@ -182,8 +174,14 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
         bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
 
     # Get text files from both source and target
-    src_dataset = TextFile([src_data], src_vocab, None)
-    trg_dataset = TextFile([trg_data], trg_vocab, None)
+    src_dataset = TextFile([src_data], src_vocab,
+                           bos_token='<S>',
+                           eos_token='</S>',
+                           unk_token='<UNK>')
+    trg_dataset = TextFile([trg_data], trg_vocab,
+                           bos_token='<S>',
+                           eos_token='</S>',
+                           unk_token='<UNK>')
 
     # Merge them to get a source, target pair
     stream = Merge([src_dataset.get_example_stream(),
@@ -267,8 +265,14 @@ def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab
             cPickle.load(open(trg_vocab)),
             bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
 
-        dev_source_dataset = TextFile([val_set], src_vocab, None)
-        dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab, None)
+        dev_source_dataset = TextFile([val_set], src_vocab,
+                                      bos_token='<S>',
+                                      eos_token='</S>',
+                                      unk_token='<UNK>')
+        dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab,
+                                      bos_token='<S>',
+                                      eos_token='</S>',
+                                      unk_token='<UNK>')
 
         dev_stream = Merge([dev_source_dataset.get_example_stream(),
                             dev_target_dataset.get_example_stream()],

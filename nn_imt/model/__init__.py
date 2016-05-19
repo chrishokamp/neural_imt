@@ -184,7 +184,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # @application(outputs=['weighted_averages', 'weights'])
 
         prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
-        import ipdb;ipdb.set_trace()
 
         # Now compute the suffix representation, and use the prefix initial states to init the recurrent transition
         feedback = self.readout.feedback(outputs)
@@ -206,7 +205,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         states = {name: results[name][:-1] for name in self._state_names}
         glimpses = {name: results[name][1:] for name in self._glimpse_names}
-        import ipdb;ipdb.set_trace()
 
         # Compute the cost
         # TODO: may need to change `readout.initial_outputs` to the last element of the prefix?
@@ -263,8 +261,6 @@ class InitialStateAttentionRecurrent(AttentionRecurrent):
             # WORKING: what are the types of the initial states?
             # provided from cost_matrix:
             # [Subtensor{int64}.0, Subtensor{int64}.0, Subtensor{int64}.0]
-
-        import ipdb;ipdb.set_trace()
 
         return initial_states
 

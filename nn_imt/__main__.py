@@ -54,8 +54,6 @@ if __name__ == "__main__":
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
         dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
-        import ipdb;ipdb.set_trace()
-
         # WORKING: write the reference suffixes from the dev stream to a file, reset config['val_set_grndtruth'] to
         # WORKING: this file
         trg_ivocab = {v: k for k, v in trg_vocab.items()}

@@ -179,10 +179,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # TODO: what about the mask?
         prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
 
-        # TODO: are these in the same order as attention.initial_glimpses -- YES
-        # attention.initial_glimpses order:
-        # @application(outputs=['weighted_averages', 'weights'])
-
         prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
 
         # Now compute the suffix representation, and use the prefix initial states to init the recurrent transition
@@ -190,7 +186,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         inputs = self.fork.apply(feedback, as_dict=True)
 
         # Run the recurrent network
-        # TODO: test that initial states and glimpses are correct
         results = self.transition.apply(
             mask=mask, return_initial_states=True, as_dict=True,
             initial_states=prefix_initial_states,
@@ -208,10 +203,11 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         # Compute the cost
         # TODO: may need to change `readout.initial_outputs` to the last element of the prefix?
+        # WORKING: setting the first element of feedback to the last feedback of the prefix
         feedback = tensor.roll(feedback, 1, 0)
-        feedback = tensor.set_subtensor(
-            feedback[0],
-            self.readout.feedback(self.readout.initial_outputs(batch_size)))
+        feedback = tensor.set_subtensor(feedback[0], prefix_feedback[-1])
+            # feedback[0],
+            # self.readout.feedback(self.readout.initial_outputs(batch_size)))
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))
         costs = self.readout.cost(readouts, outputs)

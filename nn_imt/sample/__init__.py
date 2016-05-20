@@ -305,7 +305,7 @@ class BleuValidator(SimpleExtension, SamplingBase):
                 input_values={self.source_sentence: input_,
                               self.target_prefix: prefix_input_},
                 max_length=3*len(seq), eol_symbol=self.eos_idx,
-                ignore_first_eol=True)
+                ignore_first_eol=False)
 
             # normalize costs according to the sequence lengths
             if self.normalize:
@@ -499,7 +499,7 @@ class MeteorValidator(SimpleExtension, SamplingBase):
                     input_values={self.source_sentence: input_,
                                   self.initial_context: context_input_},
                         max_length=3*len(seq), eol_symbol=self.eos_idx,
-                        ignore_first_eol=True)
+                        ignore_first_eol=False)
 
                 # normalize costs according to the sequence lengths
                 if self.normalize:

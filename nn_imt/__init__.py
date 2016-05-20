@@ -510,7 +510,7 @@ class IMTPredictor:
                     input_values={self.source_sampling_input: input_,
                                   self.target_sampling_input: prefix_input_},
                     max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
-                    ignore_first_eol=True)
+                    ignore_first_eol=False)
 
         else:
             # draw sample, checking to ensure we don't get an empty string back
@@ -518,7 +518,7 @@ class IMTPredictor:
                 self.beam_search.search(
                     input_values={self.sampling_input: input_},
                     max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
-                    ignore_first_eol=True)
+                    ignore_first_eol=False)
 
         # normalize costs according to the sequence lengths
         if self.exp_config['normalized_bleu']:

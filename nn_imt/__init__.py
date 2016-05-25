@@ -64,37 +64,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     target_prefix_mask = tensor.matrix('target_prefix_mask')
 
 
-    # TODO: add prefix variable
-    # if exp_config.get('prefix_decoding', False):
-    #     decoder = Decoder(
-    #         exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-    #         exp_config['enc_nhids'] * 2, loss_function='min_risk')
-    #     # TODO: should we change the variable name for clarity?
-    #     sampling_prefix = tensor.lmatrix('target')
-    #     generated = decoder.generate(sampling_input, sampling_representation,
-    #                                  target_prefix=sampling_prefix)
-    # else:
-    #     sampling_prefix = None
-    #     decoder = Decoder(
-    #         exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-    #         exp_config['enc_nhids'] * 2)
-    #     generated = decoder.generate(sampling_input, sampling_representation)
-    #
-    # _, samples = VariableFilter(
-    #     bricks=[decoder.sequence_generator], name="outputs")(
-    #     ComputationGraph(generated[1]))  # generated[1] is next_outputs
-    # beam_search = BeamSearch(samples=samples)
-
-    # Set the parameters
-    # logger.info("Creating Model...")
-    # model = Model(generated)
-    # logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))
-
-    # load the parameter values from an .npz file
-    # param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=brick_delimiter)
-    # LoadNMT.set_model_parameters(model, param_values)
-
-
     # Construct model
     logger.info('Building RNN encoder-decoder')
     encoder = BidirectionalEncoder(
@@ -212,7 +181,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                     src_vocab_size=config['src_vocab_size']))
 
     # Add early stopping based on bleu
-    # TODO: add IMT BLEU early stopping with prefix
+    # TODO: add IMT BLEU early stopping with prefix decoding
     if config['bleu_script'] is not None:
         logger.info("Building bleu validator")
         extensions.append(
@@ -319,7 +288,7 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     if exp_config.get('load_from_saved_parameters', False):
         logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))
         param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=brick_delimiter)
-        LoadNMT.set_model_parameters(model, param_values)
+        LoadNMT.set_model_parameters(search_model, param_values)
 
     return beam_search, search_model, samples, sampling_input, sampling_prefix
 
@@ -332,8 +301,10 @@ class IMTPredictor:
 
     def __init__(self, exp_config):
 
-        theano_variables = load_params_and_get_beam_search(exp_config, exp_config.get('brick_delimiter', None))
-        self.beam_search, self.source_sampling_input, self.target_sampling_input = theano_variables
+        theano_variables = load_params_and_get_beam_search(exp_config,
+                                                           brick_delimiter=exp_config.get('brick_delimiter', None))
+        # beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
+        self.beam_search, search_model, samples, self.source_sampling_input, self.target_sampling_input = theano_variables
 
         self.exp_config = exp_config
         # how many hyps should be output (only used in file prediction mode)
@@ -379,12 +350,11 @@ class IMTPredictor:
             sentence = sentence.split()
         return [index.get(w, unknown_token) for w in sentence]
 
-# TODO: switch to predict files, like in multimodal_nmt, we need the reference here
-# also, because we need to create the input prefixes
 # TODO: also (optionally) output the reference suffix file from this function --
 # this will be useful for external validation,
 # otherwise, it will have to be re-created for validation
-    def predict_files(self, source_file, reference_file, output_file=None):
+    def predict_files(self, source_file, prefix_file, output_file=None):
+
         tokenize = self.source_tokenizer_cmd is not None
         detokenize = self.detokenizer_cmd is not None
 
@@ -399,49 +369,38 @@ class IMTPredictor:
                     .format(self.n_best))
         total_cost = 0.0
 
-        # TODO: the tokenizer throws an error when the input file is opened with encoding='utf8'
-        # why would this happen?
-
         # WORKING:
         with codecs.open(source_file, encoding='utf8') as srcs:
-            with codecs.open(reference_file, encoding='utf8') as refs:
+            with codecs.open(prefix_file, encoding='utf8') as prefixes:
+
                 # map (source, ref) to [(source, prefix, suffix)]
                 source_lines = srcs.read().strip().split('\n')
-                ref_lines = refs.read().strip().split('\n')
-                assert len(source_lines) == len(ref_lines), 'Source and reference files must be the same length'
-                for i, instance in enumerate(zip(source_lines, ref_lines)):
+                prefix_lines = prefixes.read().strip().split('\n')
+
+                assert len(source_lines) == len(prefix_lines), 'Source and reference files must be the same length'
+                for i, instance in enumerate(zip(source_lines, prefix_lines)):
                     logger.info("Translating segment: {}".format(i))
 
                     # TODO: tokenization is not currently implemented -- assumes whitespace tokenization!!!
                     # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
                     source_seq = instance[0].split()
-                    target_seq = instance[1].split()
+                    prefix_seq = instance[1].split()
 
-                    # map to triples
-                    imt_triples = map_pair_to_imt_triples(source_seq, target_seq)
+                    translations, costs = self.predict_segment(source_seq, target_prefix=prefix_seq,
+                                                               n_best=self.n_best,
+                                                               tokenize=tokenize, detokenize=detokenize)
 
-                    # the first instance contains the empty prefix, the last instance contains the empty suffix
-                    # HACK: pop the first item until a fix for empty prefix is implemented
-                    # imt_triples = imt_triples[1:]
+                    # predict_segment returns a list of hyps, we take the best ones
+                    nbest_translations = translations[:self.n_best]
+                    nbest_costs = costs[:self.n_best]
 
-                    for src, prefix, suffix in imt_triples:
-
-                        # TODO: remove suffix from arglist of this function
-                        translations, costs = self.predict_segment(src, suffix, target_prefix=prefix,
-                                                                   n_best=self.n_best,
-                                                                   tokenize=tokenize, detokenize=detokenize)
-
-                        # predict_segment returns a list of hyps, we just take the best one
-                        nbest_translations = translations[:self.n_best]
-                        nbest_costs = costs[:self.n_best]
-
-                        if self.n_best == 1:
-                            ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
-                            total_cost += nbest_costs[0]
-                        else:
-                            # one blank line to separate each nbest list
-                            ftrans.write('\n'.join(nbest_translations) + '\n\n')
-                            total_cost += sum(nbest_costs)
+                    if self.n_best == 1:
+                        ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
+                        total_cost += nbest_costs[0]
+                    else:
+                        # one blank line to separate each nbest list
+                        ftrans.write('\n'.join(nbest_translations).decode('utf8') + '\n\n')
+                        total_cost += sum(nbest_costs)
 
                     if i != 0 and i % 100 == 0:
                         logger.info("Translated {} lines of test set...".format(i))
@@ -452,8 +411,7 @@ class IMTPredictor:
 
         return output_file
 
-    # TODO: remove suffix from arglist of this function
-    def predict_segment(self, segment, suffix, target_prefix=None, n_best=1, tokenize=False, detokenize=False):
+    def predict_segment(self, segment, target_prefix=None, n_best=1, tokenize=False, detokenize=False):
         """
         Do prediction for a single segment, which is a list of token idxs
 
@@ -498,9 +456,9 @@ class IMTPredictor:
                 target_prefix, self.exp_config['trg_vocab_size'], self.unk_idx)
 
             # TODO: remove suffix from this function -- put it outside
-            target_suffix = self.map_idx_or_unk(suffix, self.trg_vocab, self.unk_idx)
-            suffix_seq = IMTPredictor.sutils._oov_to_unk(
-                target_suffix, self.exp_config['trg_vocab_size'], self.unk_idx)
+            # target_suffix = self.map_idx_or_unk(suffix, self.trg_vocab, self.unk_idx)
+            # suffix_seq = IMTPredictor.sutils._oov_to_unk(
+            #     target_suffix, self.exp_config['trg_vocab_size'], self.unk_idx)
 
 
             prefix_input_ = numpy.tile(prefix_seq, (self.exp_config['beam_size'], 1))
@@ -552,7 +510,7 @@ class IMTPredictor:
 
             # compute score for trans_out_idxs and reference suffix
             # TODO: move this outside of the predict_segment function!
-            imt_f1_score = imt_f1(trans_out_idxs, suffix_seq)
+            # imt_f1_score = imt_f1(trans_out_idxs, suffix_seq)
 
             if detokenize:
                 detokenizer = Popen(self.detokenizer_cmd, stdin=PIPE, stdout=PIPE)
@@ -560,15 +518,67 @@ class IMTPredictor:
                 # strip off the eol symbol
                 trans_out = trans_out.strip()
 
-            # TODO: remove this quick hack
-            trans_out = trans_out.replace('<UNK>', 'UNK')
+            # TODO: remove this quick hack -- why was this here?
+            # trans_out = trans_out.replace('<UNK>', 'UNK')
 
             logger.info("Source: {}".format(src_in))
             logger.info("Target Hypothesis: {}".format(trans_out))
-            logger.info("Target Reference: {}".format(suffix))
-            logger.info("IMT F1 score: {}".format(imt_f1_score))
+            # logger.info("Target Reference: {}".format(suffix))
+            # TODO: move evaluation out of this function
+            # logger.info("IMT F1 score: {}".format(imt_f1_score))
 
             best_n_hyps.append(trans_out)
             best_n_costs.append(cost)
 
         return best_n_hyps, best_n_costs
+
+
+# TODO: old method of creating (prefix, suffix) pairs on the fly, delete this code once true IMT prediction is implemented
+#
+#         # WORKING:
+#         with codecs.open(source_file, encoding='utf8') as srcs:
+#             with codecs.open(reference_file, encoding='utf8') as refs:
+#                 # map (source, ref) to [(source, prefix, suffix)]
+#                 source_lines = srcs.read().strip().split('\n')
+#                 ref_lines = refs.read().strip().split('\n')
+#                 assert len(source_lines) == len(ref_lines), 'Source and reference files must be the same length'
+#                 for i, instance in enumerate(zip(source_lines, ref_lines)):
+#                     logger.info("Translating segment: {}".format(i))
+#
+#                     # TODO: tokenization is not currently implemented -- assumes whitespace tokenization!!!
+#                     # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
+#                     source_seq = instance[0].split()
+#                     target_seq = instance[1].split()
+#
+#                     # map to triples
+#                     imt_triples = map_pair_to_imt_triples(source_seq, target_seq)
+#
+#                     # the first instance contains the empty prefix, the last instance contains the empty suffix
+#                     # HACK: pop the first item until a fix for empty prefix is implemented
+#                     # imt_triples = imt_triples[1:]
+#
+#                     for src, prefix, suffix in imt_triples:
+#
+#                         # TODO: remove suffix from arglist of this function
+#                         translations, costs = self.predict_segment(src, suffix, target_prefix=prefix,
+#                                                                    n_best=self.n_best,
+#                                                                    tokenize=tokenize, detokenize=detokenize)
+#
+#                         # predict_segment returns a list of hyps, we just take the best one
+#                         nbest_translations = translations[:self.n_best]
+#                         nbest_costs = costs[:self.n_best]
+#
+#                         if self.n_best == 1:
+#                             ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
+#                             total_cost += nbest_costs[0]
+#                         else:
+#                             # one blank line to separate each nbest list
+#                             ftrans.write('\n'.join(nbest_translations) + '\n\n')
+#                             total_cost += sum(nbest_costs)
+#
+#                     if i != 0 and i % 100 == 0:
+#                         logger.info("Translated {} lines of test set...".format(i))
+#
+#         logger.info("Saved translated output to: {}".format(ftrans.name))
+#         logger.info("Total cost of the test: {}".format(total_cost))
+#         ftrans.close()

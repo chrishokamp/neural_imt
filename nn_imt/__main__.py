@@ -31,7 +31,7 @@ parser.add_argument("--bokeh",  default=False, action="store_true",
 if __name__ == "__main__":
     # Get configurations for model
 
-    # WORKING: set up IMT training
+    # WORKING: set up IMT evaluation and BLEU early stopping
     # training examples are triples of (source, prefix, completion)
     # so references are now completions, not the complete reference
     # THINKING: how to account for completions when user is inside a word? -- character NMT on target-side is the most satisfying,
@@ -49,13 +49,9 @@ if __name__ == "__main__":
 
     if mode == 'train':
         # Get data streams and call main
-        # TODO: switch to IMT datastreams
-        # TODO: validate that IMT datastreams still work with baseline training
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
         dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
-        # WORKING: write the reference suffixes from the dev stream to a file, reset config['val_set_grndtruth'] to
-        # WORKING: this file
         trg_ivocab = {v: k for k, v in trg_vocab.items()}
         if not os.path.isdir(config_obj['model_save_directory']):
             os.mkdir(config_obj['model_save_directory'])
@@ -68,10 +64,7 @@ if __name__ == "__main__":
                 # currently our datastream is (source,target,prefix,suffix)
                 suffix = l[-1]
                 suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
-                # TODO: remove this hack once suffixes are created properly
-                # TODO: the first suffix should include the BOS token?
-                if len(suffix_text) == 0:
-                    suffix_text = '</S>'
+                assert len(suffix_text) > 0, 'reference cannot be empty'
                 suffix_refs.write(suffix_text + '\n')
 
         config_obj['val_set_grndtruth'] = suffix_ref_filename
@@ -82,12 +75,72 @@ if __name__ == "__main__":
         predictor = IMTPredictor(config_obj)
 
         # TODO: support prediction for IMT
-        predictor.predict_file(config_obj['test_set'], config_obj.get('translated_output_file', None))
+        # TODO: the base case is that user has a source file and a target file, and wants to predict
+        # TODO: all possible (prefix, suffix) pairs from the target file, we can get this in the same way we do for traininig
+
+        # the case where user provided a file of prefixes
+        prediction_prefixes = config_obj.get('test_prefixes', None)
+        if not prediction_prefixes:
+            try:
+                prediction_refs = config_obj['test_gold_refs']
+            except KeyError:
+                print('If you do not provide a prefix file, you must provide a file of complete references')
+                raise
+
+# def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab=None, src_vocab_size=30000,
+#                                  trg_vocab=None, trg_vocab_size=30000, unk_id=1, **kwargs):
+            predict_stream, src_vocab, trg_vocab = get_dev_stream_with_prefixes(val_set=config_obj['test_set'],
+                                                      val_set_grndtruth=config_obj['test_gold_refs'],
+                                                      src_vocab=config_obj['src_vocab'],
+                                                      src_vocab_size=config_obj['src_vocab_size'],
+                                                      trg_vocab=config_obj['trg_vocab'],
+                                                      trg_vocab_size=config_obj['trg_vocab_size'],
+                                                      unk_id=config_obj['unk_id'],
+                                                      return_vocab=True)
+
+
+            src_ivocab = {v: k for k, v in src_vocab.items()}
+            trg_ivocab = {v: k for k, v in trg_vocab.items()}
+
+            if not os.path.isdir(config_obj['model_save_directory']):
+                os.mkdir(config_obj['model_save_directory'])
+
+            # now create all of the prefixes and write them to a temporary file
+            prediction_prefixes = os.path.join(config_obj['model_save_directory'], 'reference_prefixes.generated')
+            dup_sources_file = prediction_prefixes+'.sources'
+
+            sampling_base = SamplingBase()
+            # Note: we need to write a new file for sources as well, so that each source is duplicated
+            # Note: the necessary number of times
+            with codecs.open(dup_sources_file, 'w', encoding='utf8') as dup_sources:
+                with codecs.open(prediction_prefixes, 'w', encoding='utf8') as prefix_file:
+                    for l in list(predict_stream.get_epoch_iterator()):
+                        # currently our datastream is (source,target,prefix,suffix)
+                        source = l[0]
+                        prefix = l[-2]
+                        source_text = sampling_base._idx_to_word(source, src_ivocab)
+                        prefix_text = sampling_base._idx_to_word(prefix, trg_ivocab)
+                        assert len(prefix_text) > 0, 'prefix cannot be empty'
+                        dup_sources.write(source_text.decode('utf8') + '\n')
+                        prefix_file.write(prefix_text.decode('utf8') + '\n')
+
+
+        # TODO: there are at least two different cases
+        # (1) user provides two files: sources, and prefixes
+        # (2) user provides sources and targets -- the targets are split into prefixes and the sources are duplicated
+        # in the same way as they are for training
+        predictor.predict_files(dup_sources_file, prediction_prefixes, output_file=config_obj['translated_output_file'])
+        logger.info('Done Predicting')
+
     elif mode == 'evaluate':
         logger.info("Started Evaluation: ")
         val_start_time = time.time()
 
         # TODO: support evaluation for IMT
+        # WORKING: IMT evaluation is slightly more involved because we need to expand the dev set into
+        # WORKING: (source, prefix, suffix)
+        # WORKING: in practice this also means that validation takes much longer, so we should probably start with a
+        # WORKING: smaller dev set
         # TODO: move prototype IMT config to yaml config
 
         # create the control function which will run evaluation
@@ -109,8 +162,6 @@ if __name__ == "__main__":
                                                                        translated_output_file))
 
 
-
-        # NEW CODE ABOVE ###################
 
 
 

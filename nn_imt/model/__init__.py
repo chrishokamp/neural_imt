@@ -118,19 +118,13 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     def initial_states_outputs(self):
         return self.generate.states
 
-        # TODO: add the target prefix as context??
+        # TODO: add the target prefix as context -- will this speed up training?
         # @property
         # def _context_names(self):
         #     existing_contexts = super(PartialSequenceGenerator, self)._context_names
         #     return existing_contexts + ['target_prefix']
 
-    # WORKING HERE
-    # TODO: the problem is that it's not clear how initialize the recurrent transition with the prefix representation
-    # Observations:
-    # - the sequence_generator.generate method is already doing what we want, how to integrate that into cost_matrix?
-    # Idea: run the recurrent transition twice -- once for the prefix, once to compute the cost on the suffix
-    # Idea: conditional transition which lets us specify if we want to provide the initial state, or compute it
-    # Idea: the initial states of Attention Recurrent can be overridden for our purposes see :757 of bricks.attention
+
 
     @application
     def cost_matrix(self, application_call, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
@@ -166,17 +160,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             mask=prefix_mask, return_initial_states=True, as_dict=True,
             **dict_union(prefix_inputs, states, contexts))
 
-        # WORKING: get the prefix representation which we will use to init the suffix
-        # Separate the deliverables. The last states are discarded: they
-        # are not used to predict any output symbol. The initial glimpses
-        # are discarded because they are not used for prediction.
-        # Remember, glimpses are computed _before_ output stage, states are
-        # computed after.
-
-        # TODO: ensure that the order of all of the initial states is correct
         # TODO: does this make sense for the initial glimpses? these are the glimpses we used
         # TODO: to compute the last word of the prefix
-        # TODO: what about the mask?
         prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
 
         prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
@@ -197,7 +182,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # are discarded because they are not used for prediction.
         # Remember, glimpses are computed _before_ output stage, states are
         # computed after.
-
         states = {name: results[name][:-1] for name in self._state_names}
         glimpses = {name: results[name][1:] for name in self._glimpse_names}
 

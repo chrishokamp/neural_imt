@@ -265,9 +265,8 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
 
 # # Remember that the BleuValidator does hackish stuff to get target set information from the main_loop data_stream
 # # using all kwargs here makes it more clear that this function is always called with get_dev_stream(**config_dict)
-# TODO: test dev IMT data stream
 def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab=None, src_vocab_size=30000,
-                                         trg_vocab=None, trg_vocab_size=30000, unk_id=1, **kwargs):
+                                 trg_vocab=None, trg_vocab_size=30000, unk_id=1, return_vocab=False, **kwargs):
     """Setup development set stream if necessary."""
 
     dev_stream = None
@@ -306,7 +305,10 @@ def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab
         # flatten the stream back out into (source, target, target_prefix, target_suffix)
         dev_stream = Unpack(dev_stream)
 
-    return dev_stream
+    if return_vocab:
+        return dev_stream, src_vocab, trg_vocab
+    else:
+        return dev_stream
 
 
 

@@ -31,8 +31,7 @@ from machine_translation.stream import _ensure_special_tokens
 
 from nn_imt.sample import BleuValidator, Sampler, SamplingBase
 from nn_imt.model import NMTPrefixDecoder
-from nn_imt.stream import map_pair_to_imt_triples
-from nn_imt.stream import imt_f1
+from nn_imt.stream import map_pair_to_imt_triples, imt_f1, get_dev_stream_with_prefixes
 
 try:
     from blocks_extras.extensions.plot import Plot
@@ -386,6 +385,7 @@ class IMTPredictor:
                     source_seq = instance[0].split()
                     prefix_seq = instance[1].split()
 
+
                     translations, costs = self.predict_segment(source_seq, target_prefix=prefix_seq,
                                                                n_best=self.n_best,
                                                                tokenize=tokenize, detokenize=detokenize)
@@ -532,53 +532,48 @@ class IMTPredictor:
 
         return best_n_hyps, best_n_costs
 
+def split_refs_into_prefix_suffix_files(refs_file, config_obj):
 
-# TODO: old method of creating (prefix, suffix) pairs on the fly, delete this code once true IMT prediction is implemented
-#
-#         # WORKING:
-#         with codecs.open(source_file, encoding='utf8') as srcs:
-#             with codecs.open(reference_file, encoding='utf8') as refs:
-#                 # map (source, ref) to [(source, prefix, suffix)]
-#                 source_lines = srcs.read().strip().split('\n')
-#                 ref_lines = refs.read().strip().split('\n')
-#                 assert len(source_lines) == len(ref_lines), 'Source and reference files must be the same length'
-#                 for i, instance in enumerate(zip(source_lines, ref_lines)):
-#                     logger.info("Translating segment: {}".format(i))
-#
-#                     # TODO: tokenization is not currently implemented -- assumes whitespace tokenization!!!
-#                     # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
-#                     source_seq = instance[0].split()
-#                     target_seq = instance[1].split()
-#
-#                     # map to triples
-#                     imt_triples = map_pair_to_imt_triples(source_seq, target_seq)
-#
-#                     # the first instance contains the empty prefix, the last instance contains the empty suffix
-#                     # HACK: pop the first item until a fix for empty prefix is implemented
-#                     # imt_triples = imt_triples[1:]
-#
-#                     for src, prefix, suffix in imt_triples:
-#
-#                         # TODO: remove suffix from arglist of this function
-#                         translations, costs = self.predict_segment(src, suffix, target_prefix=prefix,
-#                                                                    n_best=self.n_best,
-#                                                                    tokenize=tokenize, detokenize=detokenize)
-#
-#                         # predict_segment returns a list of hyps, we just take the best one
-#                         nbest_translations = translations[:self.n_best]
-#                         nbest_costs = costs[:self.n_best]
-#
-#                         if self.n_best == 1:
-#                             ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
-#                             total_cost += nbest_costs[0]
-#                         else:
-#                             # one blank line to separate each nbest list
-#                             ftrans.write('\n'.join(nbest_translations) + '\n\n')
-#                             total_cost += sum(nbest_costs)
-#
-#                     if i != 0 and i % 100 == 0:
-#                         logger.info("Translated {} lines of test set...".format(i))
-#
-#         logger.info("Saved translated output to: {}".format(ftrans.name))
-#         logger.info("Total cost of the test: {}".format(total_cost))
-#         ftrans.close()
+    predict_stream, src_vocab, trg_vocab = get_dev_stream_with_prefixes(val_set=config_obj['test_set'],
+                                                                        val_set_grndtruth=config_obj['test_gold_refs'],
+                                                                        src_vocab=config_obj['src_vocab'],
+                                                                        src_vocab_size=config_obj['src_vocab_size'],
+                                                                        trg_vocab=config_obj['trg_vocab'],
+                                                                        trg_vocab_size=config_obj['trg_vocab_size'],
+                                                                        unk_id=config_obj['unk_id'],
+                                                                        return_vocab=True)
+
+
+    src_ivocab = {v: k for k, v in src_vocab.items()}
+    trg_ivocab = {v: k for k, v in trg_vocab.items()}
+
+    if not os.path.isdir(config_obj['model_save_directory']):
+        os.mkdir(config_obj['model_save_directory'])
+
+    # now create all of the prefixes and write them to a temporary file
+    prediction_prefixes = os.path.join(config_obj['model_save_directory'], 'reference_prefixes.generated')
+    prediction_suffixes = os.path.join(config_obj['model_save_directory'], 'reference_suffixes.generated')
+    dup_sources_file = prediction_prefixes+'.sources'
+
+    sampling_base = SamplingBase()
+    # Note: we need to write a new file for sources as well, so that each source is duplicated
+    # Note: the necessary number of times
+    with codecs.open(dup_sources_file, 'w', encoding='utf8') as dup_sources:
+        with codecs.open(prediction_prefixes, 'w', encoding='utf8') as prefix_file:
+            with codecs.open(prediction_suffixes, 'w', encoding='utf8') as suffix_file:
+                for l in list(predict_stream.get_epoch_iterator()):
+                    # currently our datastream is (source,target,prefix,suffix)
+                    source = l[0]
+                    prefix = l[-2]
+                    suffix = l[-1]
+                    source_text = sampling_base._idx_to_word(source, src_ivocab)
+                    prefix_text = sampling_base._idx_to_word(prefix, trg_ivocab)
+                    suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
+                    assert len(prefix_text) > 0, 'prefix cannot be empty'
+                    dup_sources.write(source_text.decode('utf8') + '\n')
+                    prefix_file.write(prefix_text.decode('utf8') + '\n')
+                    suffix_file.write(suffix_text.decode('utf8') + '\n')
+
+    return dup_sources_file, prediction_prefixes, prediction_suffixes
+
+

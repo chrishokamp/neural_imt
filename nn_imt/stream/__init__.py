@@ -12,42 +12,6 @@ from machine_translation.stream import (_ensure_special_tokens, _length, Padding
                                         ShuffleBatchTransformer)
 
 
-def imt_f1(hyp, ref):
-    """
-    compute Ueffing and Ney F1 for IMT
-
-    Note that this function is agnostic about its inputs, as long as they
-    are sequences. Thus the metric can be computed for sequences of characters,
-    words, phrases, etc...
-
-    :returns f1_score, precision, recall
-
-    """
-
-    # if both are empty, this is a perfect match
-    if len(hyp) == 0 and len(ref) == 0:
-        return 1., 1., 1.
-
-    match_len = float(0)
-    hyp_len = float(len(hyp))
-    ref_len = float(len(ref))
-    for h_sym, r_sym in zip(hyp, ref):
-        if h_sym == r_sym:
-            match_len += 1.
-        else:
-            break
-
-    if match_len == 0:
-        return 0., 0., 0.
-
-    # ratio of characters in the prediction which are correct (low if prefix is too long)
-    precision = match_len / hyp_len
-
-    # ratio of coverage of the reference (low if prefix is too short)
-    recall = match_len / ref_len
-    return 2 * ((precision * recall) / (precision + recall)), precision, recall
-
-
 def dcg(scores):
     num_scores = len(scores)
     assert num_scores > 0, 'you must pass a 1d iterable containing at least one score'
@@ -56,6 +20,7 @@ def dcg(scores):
     for s, i in zip(scores, range(1, num_scores + 1)):
         scaled_score = ((2**s) - 1) / numpy.log2(i + 1)
         scaled_scores.append(scaled_score)
+
     return numpy.sum(scaled_scores)
 
 

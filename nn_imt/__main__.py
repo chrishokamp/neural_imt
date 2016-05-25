@@ -14,6 +14,7 @@ from nn_imt import main, IMTPredictor, split_refs_into_prefix_suffix_files
 
 from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes
 from nn_imt.sample import SamplingBase
+from nn_imt.evaluation import imt_f1_from_files
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -142,9 +143,8 @@ if __name__ == "__main__":
         logger.info("Started Evaluation: ")
         val_start_time = time.time()
 
-        # TODO: add evaluation with IMT metrics here
-        # TODO: support more evaluation metrics than just BLEU score
         if 'bleu' in evaluation_metrics:
+            # TODO: add a sanity check that hyps and refs have the same number of lines, and no refs or hyps are empty
             translated_output_file = config_obj.get('translated_output_file', None)
             # get gold refs
             multibleu_cmd = ['perl', config_obj['bleu_script'],
@@ -169,6 +169,10 @@ if __name__ == "__main__":
             bleu_score = float(out_parse.group()[6:])
             logger.info('BLEU SCORE: {}'.format(bleu_score))
             mb_subprocess.terminate()
+        if 'imt_f1' in evaluation_metrics:
+            translated_output_file = config_obj.get('translated_output_file', None)
+            imt_f1_score, precision, recall = imt_f1_from_files(translated_output_file, references_file)
+            logger.info('IMT F1 SCORE: {}, precision: {}, recall: {}'.format(imt_f1_score, precision, recall))
 
     elif mode == 'server':
 

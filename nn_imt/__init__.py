@@ -26,12 +26,12 @@ from blocks_extras.extensions.plot import Plot
 from machine_translation.checkpoint import CheckpointNMT, LoadNMT
 from machine_translation.model import BidirectionalEncoder
 
-# TODO: these will break during training -- implement them for IMT
 from machine_translation.stream import _ensure_special_tokens
 
 from nn_imt.sample import BleuValidator, Sampler, SamplingBase
 from nn_imt.model import NMTPrefixDecoder
-from nn_imt.stream import map_pair_to_imt_triples, imt_f1, get_dev_stream_with_prefixes
+from nn_imt.stream import map_pair_to_imt_triples, get_dev_stream_with_prefixes
+from nn_imt.evaluation import imt_f1
 
 try:
     from blocks_extras.extensions.plot import Plot
@@ -42,7 +42,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# WORKING: fix the IMT datastream to include <S> and </S> so prefixes and suffixes are never empty
 # WORKING: train IMT with validation using BLEU/METEOR on suffix
 # WORKING: remember to cut the suffix for validation to only one EOS token
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
@@ -82,8 +81,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     #     encoder.apply(source_sentence, source_sentence_mask),
     #     source_sentence_mask, target_sentence, target_sentence_mask,
     #     target_prefix, target_prefix_mask)
-    # TODO: update this signature for IMT
-    # WORKING HERE -- compute cost using the target prefix directly
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask, target_sentence, target_sentence_mask,

@@ -14,7 +14,7 @@ from nn_imt import main, IMTPredictor, split_refs_into_prefix_suffix_files
 
 from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes
 from nn_imt.sample import SamplingBase
-from nn_imt.evaluation import imt_f1_from_files
+from nn_imt.evaluation import imt_f1_from_files, imt_ndcg_from_files
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -74,6 +74,7 @@ if __name__ == "__main__":
 
     elif mode == 'predict':
         predictor = IMTPredictor(config_obj)
+        n_best_rank = config_obj.get('n_best', 1)
         # Two different cases for prediction
         # (1) user provides two files: sources, and prefixes
         # (2) user provides sources and targets -- the targets are split into prefixes and the sources are duplicated
@@ -82,7 +83,6 @@ if __name__ == "__main__":
         # the case where user provided a file of prefixes
         prediction_prefixes = config_obj.get('test_prefixes', None)
 
-        # TODO: move this logic outside so we can reuse it in evaluation
         if not prediction_prefixes:
             try:
                 prediction_refs = config_obj['test_gold_refs']
@@ -90,7 +90,8 @@ if __name__ == "__main__":
                 print('If you do not provide a prefix file, you must provide a file of complete references')
                 raise
 
-            sources_file, prediction_prefixes, _ = split_refs_into_prefix_suffix_files(prediction_refs, config_obj)
+            sources_file, prediction_prefixes, _ = split_refs_into_prefix_suffix_files(prediction_refs, config_obj,
+                                                                                       n_best=n_best_rank)
         else:
             sources_file = config_obj['test_set']
 
@@ -110,8 +111,17 @@ if __name__ == "__main__":
         # create the control function which will run evaluation
         # currently available evaluation metrics: 'bleu', 'meteor', 'imt_f1', 'imt_ndcg'
         evaluation_metrics = config_obj.get('evaluation_metrics', ['bleu'])
+        n_best_list_metrics = set(['imt_ndcg'])
+        n_best_rank = config_obj.get('n_best', None)
+        if n_best_rank > 1:
+            original_metrics = set(evaluation_metrics)
+            evaluation_metrics = [m for m in evaluation_metrics if m in n_best_list_metrics]
+            removed_metrics = original_metrics - set(evaluation_metrics)
+            logger.warn('You specified n_best = {}'.format(n_best_rank))
+            logger.warn('Therefore, I removed the following metrics from your list: {}'.format(removed_metrics))
 
         # translate if necessary, write output file, call external evaluation tools and show output
+        # TODO: there is an error here if we don't check that hyps and refs have the same number of lines
         translated_output_file = config_obj.get('translated_output_file', None)
         if translated_output_file is not None and os.path.isfile(translated_output_file):
             logger.info('{} already exists, so I\'m evaluating the BLEU score of this file with respect to the ' +
@@ -124,7 +134,6 @@ if __name__ == "__main__":
             # the case where user provided a file of prefixes
             prediction_prefixes = config_obj.get('test_prefixes', None)
 
-            # TODO: move this logic outside so we can reuse it in evaluation
             if not prediction_prefixes:
                 try:
                     prediction_refs = config_obj['test_gold_refs']
@@ -132,7 +141,9 @@ if __name__ == "__main__":
                     print('If you do not provide a prefix file, you must provide a file of complete references')
                     raise
 
-                sources_file, prediction_prefixes, references_file = split_refs_into_prefix_suffix_files(prediction_refs, config_obj)
+                sources_file, prediction_prefixes, references_file = split_refs_into_prefix_suffix_files(prediction_refs,
+                                                                                                         config_obj,
+                                                                                                         n_best=n_best_rank)
             else:
                 sources_file = config_obj['test_set']
                 references_file = config_obj['test_gold_refs']
@@ -144,6 +155,7 @@ if __name__ == "__main__":
         val_start_time = time.time()
 
         if 'bleu' in evaluation_metrics:
+
             # TODO: add a sanity check that hyps and refs have the same number of lines, and no refs or hyps are empty
             translated_output_file = config_obj.get('translated_output_file', None)
             # get gold refs
@@ -156,7 +168,7 @@ if __name__ == "__main__":
                     print(l.encode('utf8'), file=mb_subprocess.stdin)
             mb_subprocess.stdin.flush()
 
-        # send end of file, read output.
+            # send end of file, read output.
             mb_subprocess.stdin.close()
             stdout = mb_subprocess.stdout.readline()
             logger.info(stdout)
@@ -173,6 +185,15 @@ if __name__ == "__main__":
             translated_output_file = config_obj.get('translated_output_file', None)
             imt_f1_score, precision, recall = imt_f1_from_files(translated_output_file, references_file)
             logger.info('IMT F1 SCORE: {}, precision: {}, recall: {}'.format(imt_f1_score, precision, recall))
+        if 'imt_ndcg' in evaluation_metrics:
+            # Note: this metric requires an nbest list with rank > 1
+            if n_best_rank is None or n_best_rank <=1:
+                raise KeyError('NCDG needs a rank >1 to make sense as an evaluation metric')
+
+            translated_output_file = config_obj.get('translated_output_file', None)
+            imt_ndcg_score = imt_ndcg_from_files(translated_output_file, references_file)
+            logger.info('IMT_NDCG SCORE: {}'.format(imt_ndcg_score))
+
 
     elif mode == 'server':
 

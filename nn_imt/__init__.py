@@ -529,7 +529,7 @@ class IMTPredictor:
 
         return best_n_hyps, best_n_costs
 
-def split_refs_into_prefix_suffix_files(refs_file, config_obj):
+def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
 
     predict_stream, src_vocab, trg_vocab = get_dev_stream_with_prefixes(val_set=config_obj['test_set'],
                                                                         val_set_grndtruth=config_obj['test_gold_refs'],
@@ -567,9 +567,17 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj):
                     prefix_text = sampling_base._idx_to_word(prefix, trg_ivocab)
                     suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
                     assert len(prefix_text) > 0, 'prefix cannot be empty'
+
                     dup_sources.write(source_text.decode('utf8') + '\n')
                     prefix_file.write(prefix_text.decode('utf8') + '\n')
-                    suffix_file.write(suffix_text.decode('utf8') + '\n')
+
+                    # we use the suffix file as references for the n-best list, so we may need to duplicate it
+                    for _ in range(n_best):
+                        suffix_file.write(suffix_text.decode('utf8') + '\n')
+                    # if this is an n_best list, separate lists by new lines
+                    if n_best > 1:
+                        suffix_file.write('\n')
+
 
     return dup_sources_file, prediction_prefixes, prediction_suffixes
 

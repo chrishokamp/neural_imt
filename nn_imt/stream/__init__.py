@@ -12,23 +12,6 @@ from machine_translation.stream import (_ensure_special_tokens, _length, Padding
                                         ShuffleBatchTransformer)
 
 
-def dcg(scores):
-    num_scores = len(scores)
-    assert num_scores > 0, 'you must pass a 1d iterable containing at least one score'
-
-    scaled_scores = []
-    for s, i in zip(scores, range(1, num_scores + 1)):
-        scaled_score = ((2**s) - 1) / numpy.log2(i + 1)
-        scaled_scores.append(scaled_score)
-
-    return numpy.sum(scaled_scores)
-
-
-def ndcg(scores):
-    ideal_dcg = dcg(sorted(scores, reverse=True))
-    normed_cdg = dcg(scores) / ideal_dcg
-    return normed_cdg
-
 
 def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
     """

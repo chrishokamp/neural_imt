@@ -10,6 +10,7 @@ from subprocess import Popen, PIPE
 
 from machine_translation import configurations
 
+import nn_imt.min_risk as min_risk
 from nn_imt import main, IMTPredictor, split_refs_into_prefix_suffix_files
 
 from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes
@@ -32,7 +33,6 @@ parser.add_argument("--bokeh",  default=False, action="store_true",
 if __name__ == "__main__":
     # Get configurations for model
 
-    # WORKING: set up IMT evaluation and BLEU early stopping
     # training examples are triples of (source, prefix, completion)
     # so references are now completions, not the complete reference
     # THINKING: how to account for completions when user is inside a word? -- character NMT on target-side is the most satisfying,
@@ -53,6 +53,7 @@ if __name__ == "__main__":
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
         dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
+        # HACK THE VALIDATION
         trg_ivocab = {v: k for k, v in trg_vocab.items()}
         if not os.path.isdir(config_obj['model_save_directory']):
             os.mkdir(config_obj['model_save_directory'])
@@ -71,6 +72,33 @@ if __name__ == "__main__":
         config_obj['val_set_grndtruth'] = suffix_ref_filename
 
         main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
+
+    # WORKING: implement a new min-risk mode with smart and fast sampling
+    elif mode == 'min-risk':
+        # TODO: this is currently just a hack to get the vocab
+        _, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
+        dev_stream = get_dev_stream_with_prefixes(**config_obj)
+
+        # HACK THE VALIDATION
+        trg_ivocab = {v: k for k, v in trg_vocab.items()}
+        if not os.path.isdir(config_obj['model_save_directory']):
+            os.mkdir(config_obj['model_save_directory'])
+
+        suffix_ref_filename = os.path.join(config_obj['model_save_directory'], 'reference_suffixes.out')
+
+        sampling_base = SamplingBase()
+        with codecs.open(suffix_ref_filename, 'w') as suffix_refs:
+            for l in list(dev_stream.get_epoch_iterator()):
+                # currently our datastream is (source,target,prefix,suffix)
+                suffix = l[-1]
+                suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
+                assert len(suffix_text) > 0, 'reference cannot be empty'
+                suffix_refs.write(suffix_text + '\n')
+
+        config_obj['val_set_grndtruth'] = suffix_ref_filename
+
+        logger.info('Starting min-risk training')
+        min_risk.main(config_obj, src_vocab, trg_vocab, use_bokeh=True)
 
     elif mode == 'predict':
         predictor = IMTPredictor(config_obj)

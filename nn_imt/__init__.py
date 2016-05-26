@@ -67,11 +67,9 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
 
-    # TODO: switch to prefix decoding decoder
-    # TODO: remove overloading of `loss_function` -- IMT should do prefix decoding by default
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
-        config['enc_nhids'] * 2, loss_function='min_risk')
+        config['enc_nhids'] * 2, loss_function='cross_entropy')
 
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
@@ -238,21 +236,19 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
 # TODO: use this function in training as well (at least for sampling and validation components)
 # TODO: to get the pieces we need to setup the graphs
-# TODO: break this function into
+# TODO: break this function into parts
 def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None):
 
     if encoder is None:
         encoder = BidirectionalEncoder(
             exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
 
-    # TODO: remove the 'loss_function' param, it's not needed for prediction
-    # TODO: remove 'prefix_decoding' from IMT config -- this is the purpose of IMT
     # Note: decoder should be None when we are just doing prediction, not validation
     if decoder is None:
         decoder = NMTPrefixDecoder(
             exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-            exp_config['enc_nhids'] * 2, loss_function='min_risk')
-        # rename to match baseline NMT systems
+            exp_config['enc_nhids'] * 2, loss_function='cross_entropy')
+        # rename to match baseline NMT systems so that params can be transparently initialized
         decoder.name = 'decoder'
 
     # Create Theano variables
@@ -288,8 +284,7 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
 
     return beam_search, search_model, samples, sampling_input, sampling_prefix
 
-# TODO: the predictor needs modes -- prefix prediction vs prediction from scratch
-# TODO: Another option would be to always pass a '0' prefix to keep the theano function interface the same
+# TODO: does the predictor need modes? -- prefix prediction vs prediction from scratch
 class IMTPredictor:
     """"Uses a trained NMT model to do IMT prediction -- prediction where input includes a prefix"""
 
@@ -346,9 +341,6 @@ class IMTPredictor:
             sentence = sentence.split()
         return [index.get(w, unknown_token) for w in sentence]
 
-# TODO: also (optionally) output the reference suffix file from this function --
-# this will be useful for external validation,
-# otherwise, it will have to be re-created for validation
     def predict_files(self, source_file, prefix_file, output_file=None):
 
         tokenize = self.source_tokenizer_cmd is not None
@@ -377,7 +369,7 @@ class IMTPredictor:
                 for i, instance in enumerate(zip(source_lines, prefix_lines)):
                     logger.info("Translating segment: {}".format(i))
 
-                    # TODO: tokenization is not currently implemented -- assumes whitespace tokenization!!!
+                    # Note: tokenization is not currently implemented -- assumes whitespace tokenization!!!
                     # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
                     source_seq = instance[0].split()
                     prefix_seq = instance[1].split()
@@ -426,14 +418,10 @@ class IMTPredictor:
 
         """
 
-        # if there is a prefix, we need to tokenize and preprocess it also
-        # TODO: prefix can be a kwarg, but how to transparently create the Decoder?
-        # TODO: probably the easiest way is just to always use the PartialSequenceGenerator for
-        # TODO: decoders which are for prediction only
-
         if tokenize:
             source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
             segment, _ = source_tokenizer.communicate(segment)
+            # if there is a prefix, we need to tokenize and preprocess it also
             if target_prefix is not None:
                 target_tokenizer = Popen(self.target_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
                 target_prefix, _ = target_tokenizer.communicate(target_prefix)
@@ -451,12 +439,6 @@ class IMTPredictor:
             target_prefix = self.map_idx_or_unk(target_prefix, self.trg_vocab, self.unk_idx)
             prefix_seq = IMTPredictor.sutils._oov_to_unk(
                 target_prefix, self.exp_config['trg_vocab_size'], self.unk_idx)
-
-            # TODO: remove suffix from this function -- put it outside
-            # target_suffix = self.map_idx_or_unk(suffix, self.trg_vocab, self.unk_idx)
-            # suffix_seq = IMTPredictor.sutils._oov_to_unk(
-            #     target_suffix, self.exp_config['trg_vocab_size'], self.unk_idx)
-
 
             prefix_input_ = numpy.tile(prefix_seq, (self.exp_config['beam_size'], 1))
             # draw sample, checking to ensure we don't get an empty string back
@@ -505,30 +487,22 @@ class IMTPredictor:
                 trans_out = '<UNK>'
                 cost = 0.
 
-            # compute score for trans_out_idxs and reference suffix
-            # TODO: move this outside of the predict_segment function!
-            # imt_f1_score = imt_f1(trans_out_idxs, suffix_seq)
-
             if detokenize:
                 detokenizer = Popen(self.detokenizer_cmd, stdin=PIPE, stdout=PIPE)
                 trans_out, _ = detokenizer.communicate(trans_out)
                 # strip off the eol symbol
                 trans_out = trans_out.strip()
 
-            # TODO: remove this quick hack -- why was this here?
-            # trans_out = trans_out.replace('<UNK>', 'UNK')
-
             logger.info("Source: {}".format(src_in))
             logger.info("Target Hypothesis: {}".format(trans_out))
-            # logger.info("Target Reference: {}".format(suffix))
-            # TODO: move evaluation out of this function
-            # logger.info("IMT F1 score: {}".format(imt_f1_score))
 
             best_n_hyps.append(trans_out)
             best_n_costs.append(cost)
 
         return best_n_hyps, best_n_costs
 
+
+# TODO: use the refs properly as specified in the function signature
 def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
 
     predict_stream, src_vocab, trg_vocab = get_dev_stream_with_prefixes(val_set=config_obj['test_set'],

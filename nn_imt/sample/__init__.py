@@ -39,14 +39,14 @@ class SampleFunc:
 
     # TODO: we may be able to make this function faster by passing multiple sources for sampling at the same damn time
     # TODO: or by avoiding the for loop somehow
-    def __call__(self, source_seq, initial_context, num_samples=1):
+    def __call__(self, source_seq, target_prefix, num_samples=1):
 
         source_inputs = numpy.tile(source_seq[None, :], (num_samples, 1))
-        context_inputs = numpy.tile(initial_context[None, :], (num_samples, 1))
+        prefix_inputs = numpy.tile(target_prefix[None, :], (num_samples, 1))
 
         # the output is [seq_len, batch]
         # TODO: make sure the order of arguments is correct, because we used model.get_theano_function
-        _1, outputs, _2, _3, costs = self.sample_func(source_inputs, context_inputs)
+        _1, outputs, _2, _3, costs = self.sample_func(source_inputs, prefix_inputs)
         outputs = outputs.T
 
         # TODO: this step could be avoided by computing the samples mask in a different way
@@ -291,10 +291,6 @@ class BleuValidator(SimpleExtension, SamplingBase):
                 line[0], self.config['src_vocab_size'], self.unk_idx)
 
             target_prefix = line[2]
-            # print(target_prefix)
-            # TODO: remove this hack once we force prefixes and suffixes to never be empty
-            # if len(target_prefix) == 0:
-            #     target_prefix = [self.trg_vocab['<UNK>']]
 
             input_ = numpy.tile(seq, (self.config['beam_size'], 1))
             prefix_input_ = numpy.tile(target_prefix, (self.config['beam_size'], 1))

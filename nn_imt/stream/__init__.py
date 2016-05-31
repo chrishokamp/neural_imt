@@ -107,10 +107,12 @@ class IMTSampleStreamTransformer:
 
     """
 
-    def __init__(self, sample_func, score_func, num_samples=1, **kwargs):
+    def __init__(self, sample_func, score_func, num_samples=1, max_value=0.99, min_value=0.01, **kwargs):
         self.sample_func = sample_func
         self.score_func = score_func
         self.num_samples = num_samples
+        self.max_value = max_value
+        self.min_value = min_value
         # kwargs will get passed to self.score_func when it gets called
         self.kwargs = kwargs
 
@@ -118,14 +120,36 @@ class IMTSampleStreamTransformer:
         source = data[0]
         reference = data[1]
         prefix = data[2]
-        suffix = data[3]
+        suffix = data[3] # in IMT, the suffix is the reference
 
         # each sample may be of different length
         samples = self.sample_func(numpy.array(source), numpy.array(prefix), self.num_samples)
-        # TODO: we currently have to pass the source because of the interface to mteval_v13
-        scores = numpy.array(self._compute_scores(source, reference, samples, **self.kwargs)).astype('float32')
 
-        return (samples, scores)
+        # TODO: here we need to check for (1) duplicate samples, and (2) add the reference to the sample set
+        # TODO: finding non-duplicate samples could loop infinitely, so we should add a max_tries param
+
+
+        # Note: we currently have to pass the source because of the interface to mteval_v13
+        scores = self._compute_scores(source, suffix, samples, **self.kwargs)
+
+        filtered_scores = []
+        for i,s in enumerate(scores):
+            if s < self.min_value:
+                filtered_scores.append(self.min_value)
+            elif s > self.max_value:
+                filtered_scores.append(self.max_value)
+            else:
+                filtered_scores.append(s)
+
+        filtered_scores = numpy.array(filtered_scores, dtype='float32')
+
+        print('source: {}'.format(source))
+        print('prefix: {}'.format(prefix))
+        print('suffix: {}'.format(suffix))
+        print('samples: {}'.format(samples))
+        print('scores: {}'.format(filtered_scores))
+
+        return (samples, filtered_scores)
 
     # Note that many sentence-level metrics like BLEU can be computed directly over the indexes (not the strings),
     # Note that some sentence-level metrics like METEOR require the string representation
@@ -224,7 +248,6 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     stream = Unpack(stream)
 
     # Now make a very big batch that we can shuffle
-    # Build a batched version of stream to read k batches ahead
     shuffle_batch_size = kwargs['shuffle_batch_size']
     stream = Batch(stream,
                    iteration_scheme=ConstantScheme(shuffle_batch_size)

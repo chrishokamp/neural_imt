@@ -2,6 +2,16 @@ import codecs
 import numpy
 
 
+# sentence level imt_f1 scoring
+# TODO: we really shouldn't need to pass the source here, this is because of the mteval_v13 interface
+def sentence_level_imt_f1(src, ref, samples, **kwargs):
+
+    scores, _, _ = zip(*[imt_f1(sample, ref) for sample in samples])
+    one_minus_scores = [1.-s for s in scores]
+
+    return one_minus_scores
+
+
 def imt_f1(hyp, ref):
     """
     compute Ueffing and Ney F1 for IMT

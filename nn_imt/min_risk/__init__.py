@@ -40,13 +40,13 @@ from machine_translation.evaluation import sentence_level_bleu, sentence_level_m
 from machine_translation.stream import (get_textfile_stream, _too_long, _oov_to_unk, _length,
                                         ShuffleBatchTransformer, PaddingWithEOS, FlattenSamples)
 
-from nn_imt.sample import BleuValidator, Sampler, SamplingBase
+from nn_imt.sample import BleuValidator, IMT_F1_Validator, Sampler, SamplingBase
 from nn_imt.model import NMTPrefixDecoder
 from nn_imt.sample import SampleFunc
 
 from nn_imt.stream import (PrefixSuffixStreamTransformer, CopySourceAndTargetToMatchPrefixes,
                            IMTSampleStreamTransformer, CopySourceAndPrefixNTimes, get_dev_stream_with_prefixes)
-from nn_imt.evaluation import imt_f1
+from nn_imt.evaluation import sentence_level_imt_f1
 
 try:
     from blocks_extras.extensions.plot import Plot
@@ -152,7 +152,6 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     # flatten the stream back out into (source, target, target_prefix, target_suffix)
     training_stream = Unpack(training_stream)
 
-
 # Filter sequences that are too long
 # TODO: the logic would need to be modified to use this filter w/ context features
 # training_stream = Filter(training_stream,
@@ -163,7 +162,7 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     trg_ivocab = {v:k for k,v in trg_vocab.items()}
 
     # TODO: configure min-risk score func from the yaml config
-    # TODO: add min_risk params to yaml config
+    # TODO: implemment sentence level imt_f1 as a metric
     min_risk_score_func = exp_config.get('min_risk_score_func', 'bleu')
 
     if min_risk_score_func == 'meteor':
@@ -174,7 +173,11 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
                                                           lang=exp_config['target_lang'],
                                                           meteor_directory=exp_config['meteor_directory']
                                                          )
-    # BLEU
+    elif min_risk_score_func == 'imt_f1':
+        sampling_transformer = IMTSampleStreamTransformer(sampling_func,
+                                                          sentence_level_imt_f1,
+                                                          num_samples=exp_config['n_samples'])
+    # BLEU is default
     else:
         sampling_transformer = IMTSampleStreamTransformer(sampling_func,
                                                           sentence_level_bleu,
@@ -184,15 +187,14 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
 
     # Now make a very big batch that we can shuffle
     # Build a batched version of stream to read k batches ahead
-    # TODO: this part causes an error in NIMT for some reason
-    # shuffle_batch_size = exp_config['shuffle_batch_size']
-    # training_stream = Batch(training_stream,
-    #                         iteration_scheme=ConstantScheme(shuffle_batch_size))
+    shuffle_batch_size = exp_config['shuffle_batch_size']
+    training_stream = Batch(training_stream,
+                            iteration_scheme=ConstantScheme(shuffle_batch_size))
 
-    # training_stream = ShuffleBatchTransformer(training_stream)
+    training_stream = ShuffleBatchTransformer(training_stream)
 
     # unpack it again
-    # training_stream = Unpack(training_stream)
+    training_stream = Unpack(training_stream)
 
     # Build a batched version of stream to read k batches ahead
     batch_size = exp_config['batch_size']
@@ -216,10 +218,6 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
 
     # Pad sequences that are short
     # TODO: is it correct to blindly pad the target_prefix and the target_suffix?
-    # WORKING: there is an error here
-    # masked_stream = PaddingWithEOS(
-    #     expanded_source_stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
-    #     mask_sources=('source', 'target', 'target_prefix', 'target_suffix', 'samples'))
     masked_stream = PaddingWithEOS(
         expanded_source_stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
         mask_sources=('source', 'target', 'target_prefix', 'target_suffix', 'samples'))
@@ -227,12 +225,9 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     return train_encoder, train_decoder, theano_sampling_source_input, theano_sampling_context_input, generated, masked_stream
 
 
-
-# WORKING: continue...
-# WORKING: remember to add the target prefix mask -- this is different from mmmt
 # create the model for training
 # TODO: implement the expected_cost multimodal decoder
-def create_model(encoder, decoder):
+def create_model(encoder, decoder, smoothing_constant=0.005):
 
     # Create Theano variables
     logger.info('Creating theano variables')
@@ -256,7 +251,7 @@ def create_model(encoder, decoder):
         source_sentence_mask, samples, samples_mask, scores,
         prefix_outputs=target_prefix,
         prefix_mask=prefix_mask,
-        smoothing_constant=0.005
+        smoothing_constant=smoothing_constant
     )
 
     return cost
@@ -269,7 +264,7 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
 # def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     # def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     train_encoder, train_decoder, theano_sampling_source_input, theano_sampling_context_input, generated, masked_stream = setup_model_and_stream(exp_config, source_vocab, target_vocab)
-    cost = create_model(train_encoder, train_decoder)
+    cost = create_model(train_encoder, train_decoder, exp_config.get('imt_smoothing_constant', 0.005))
 
 # Set up training model
     logger.info("Building model")
@@ -348,6 +343,7 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
 
     # Add early stopping based on bleu
     # TODO: use multimodal meteor and BLEU validator
+    # TODO: add 'validator' key to IMT config
     # Add early stopping based on bleu
     if exp_config.get('bleu_script', None) is not None:
         logger.info("Building bleu validator")
@@ -388,12 +384,15 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
     logger.info("Initializing training algorithm")
 
     # if there is l2_regularization, dropout or random noise, we need to use the output of the modified graph
+    # WORKING: try to catch and fix nan
+    from theano.compile.nanguardmode import NanGuardMode
     if exp_config['dropout'] < 1.0:
         algorithm = GradientDescent(
             cost=cg.outputs[0], parameters=cg.parameters,
             step_rule=CompositeRule([StepClipping(exp_config['step_clipping']),
                                      eval(exp_config['step_rule'])()]),
-            on_unused_sources='warn'
+            on_unused_sources='warn',
+            theano_func_kwargs={'mode': NanGuardMode(nan_is_error=True, inf_is_error=True)}
         )
     else:
         algorithm = GradientDescent(

@@ -318,6 +318,7 @@ class BleuValidator(SimpleExtension, SamplingBase):
         if self.verbose:
             ftrans = open(self.config['val_set_out'], 'w')
 
+        print('LENGTH OF DEV STREAM: {}'.format(len(list(self.data_stream.get_epoch_iterator()))))
         for i, line in enumerate(self.data_stream.get_epoch_iterator()):
             """
             Load the sentence, retrieve the sample, write to file
@@ -354,7 +355,11 @@ class BleuValidator(SimpleExtension, SamplingBase):
                     trans_out = trans[best]
 
                     # convert idx to words
+		    #print('input_seq: {}'.format(seq))
+		    #print('input_prefix: {}'.format(target_prefix))
+		    #print('trans_out_raw: {}'.format(trans_out))
                     trans_out = self._idx_to_word(trans_out, self.trg_ivocab)
+		    #print('trans_out_text: {}'.format(trans_out))
 
                 except ValueError:
                     logger.info(

@@ -176,6 +176,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Add early stopping based on bleu
     # TODO: add IMT BLEU early stopping with prefix decoding
+    import ipdb;ipdb.set_trace()
     if config['bleu_script'] is not None:
         logger.info("Building bleu validator")
         extensions.append(

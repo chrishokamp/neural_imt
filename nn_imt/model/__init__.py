@@ -382,16 +382,13 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
         word_probs = tensor.log(word_probs)
 
         # Note: converting the samples to one-hot wastes space, but it gets the job done
-        # TODO: this op will cause out of memory with a large vocabulary
         # a different way of getting the one hots
         flat_samples = samples.flatten()
         zeros = theano.tensor.zeros((flat_samples.shape[0], word_probs.shape[-1]))
         #arange for first 2 dims, then flat samples
-        #flat_sample_shape = samples.shape[0]*samples.shape[1]
         one_hot_samples = theano.tensor.set_subtensor(zeros[theano.tensor.arange(flat_samples.shape[0]), flat_samples], 1.)
         one_hot_samples = one_hot_samples.reshape(word_probs.shape)
 
-        #one_hot_samples = tensor.eye(word_probs.shape[-1])[samples]
         one_hot_samples.astype('float32')
         actual_probs = word_probs * one_hot_samples
 

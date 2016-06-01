@@ -267,7 +267,7 @@ def create_model(encoder, decoder, smoothing_constant=0.005):
 
 
 # def main(model, cost, config, tr_stream, dev_stream, use_bokeh=False):
-def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
+def main(exp_config, source_vocab, target_vocab, dev_stream, use_bokeh=True):
 
 
 # def setup_model_and_stream(exp_config, source_vocab, target_vocab):
@@ -278,10 +278,6 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
 # Set up training model
     logger.info("Building model")
     train_model = Model(cost)
-
-    dev_stream = get_dev_stream_with_prefixes(**exp_config)
-
-# main(train_model, training_cost, exp_config, masked_stream, dev_stream=dev_stream, use_bokeh=True)
 
     # Set the parameters from a trained models (.npz file)
     logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))

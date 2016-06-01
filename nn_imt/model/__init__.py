@@ -3,6 +3,7 @@ from theano import tensor
 from toolz import merge
 
 from blocks.bricks.base import application
+from blocks.bricks.recurrent import recurrent
 from blocks.bricks import NDimensionalSoftmax
 from blocks.bricks.parallel import Parallel, Distribute
 
@@ -31,6 +32,10 @@ from picklable_itertools.extras import equizip
 
 # theano.config.optimizer = 'None'
 # theano.config.traceback.limit = 20
+
+# WORKING: optionally return the generation probability of samples from this method
+# change the expected_cost computation to take the scores as input
+# this should speed up min-risk significantly, because we won't need to recompute the generation costs
 
 # Note: this sequence generator lets us use baseline NMT models for IMT
 class PartialSequenceGenerator(BaseSequenceGenerator):
@@ -219,6 +224,68 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
     def probs(self, readouts):
         return self.softmax.apply(readouts, extra_ndim=readouts.ndim - 2)
 
+    # WORKING: modify this method to return the log probabilities as well
+    @recurrent
+    def generate(self, outputs, **kwargs):
+        """A sequence generation step.
+
+        Parameters
+        ----------
+        outputs : :class:`~tensor.TensorVariable`
+            The outputs from the previous step.
+
+        Notes
+        -----
+        The contexts, previous states and glimpses are expected as keyword
+        arguments.
+
+        """
+        states = dict_subset(kwargs, self._state_names)
+        # masks in context are optional (e.g. `attended_mask`)
+        contexts = dict_subset(kwargs, self._context_names, must_have=False)
+        glimpses = dict_subset(kwargs, self._glimpse_names)
+
+        next_glimpses = self.transition.take_glimpses(
+            as_dict=True, **dict_union(states, glimpses, contexts))
+        next_readouts = self.readout.readout(
+            feedback=self.readout.feedback(outputs),
+            **dict_union(states, next_glimpses, contexts))
+        next_outputs = self.readout.emit(next_readouts)
+        next_costs = self.readout.cost(next_readouts, next_outputs)
+        next_feedback = self.readout.feedback(next_outputs)
+        next_inputs = (self.fork.apply(next_feedback, as_dict=True)
+                       if self.fork else {'feedback': next_feedback})
+        next_states = self.transition.compute_states(
+            as_list=True,
+            **dict_union(next_inputs, states, next_glimpses, contexts))
+
+        # TODO: switch to directly getting the probs from softmax
+        next_probs = self.softmax.apply(next_readouts)
+
+        return (next_states + [next_outputs] +
+                list(next_glimpses.values()) + [next_costs] + [next_probs])
+
+    @generate.delegate
+    def generate_delegate(self):
+        return self.transition.apply
+
+    @generate.property('states')
+    def generate_states(self):
+        return self._state_names + ['outputs'] + self._glimpse_names
+
+    @generate.property('outputs')
+    def generate_outputs(self):
+        return (self._state_names + ['outputs'] +
+                self._glimpse_names + ['costs'] + ['word_probs'])
+
+    def get_dim(self, name):
+        if name in (self._state_names + self._context_names +
+                        self._glimpse_names):
+            return self.transition.get_dim(name)
+        elif name == 'outputs':
+            return self.readout.get_dim(name)
+        return super(BaseSequenceGenerator, self).get_dim(name)
+
     # TODO: check where 'target_samples_mask' is used -- do we need a mask for context features (probably not)
     # Note: the @application decorator inspects the arguments, and transparently adds args  ('application_call')
     @application(inputs=['representation', 'source_sentence_mask',
@@ -257,7 +324,6 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
         }
 
         batch_size = samples.shape[1]
-
 
         prefix_feedback = self.readout.feedback(prefix_outputs)
         prefix_inputs = self.fork.apply(prefix_feedback, as_dict=True)
@@ -301,14 +367,15 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
         glimpses = {name: results[name][1:] for name in self._glimpse_names}
 
         # Compute the cost
-        # TODO: may need to change `readout.initial_outputs` to the last element of the prefix?
         # Note: setting the first element of feedback to the last feedback of the prefix
         feedback = tensor.roll(feedback, 1, 0)
         feedback = tensor.set_subtensor(feedback[0], prefix_feedback[-1])
-        # feedback[0],
-        # self.readout.feedback(self.readout.initial_outputs(batch_size)))
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))
+
+        # WORKING: use the seq_probs passed in from the sampler --
+        # TODO: we can't do that because theano can't infer the graph
+        # TODO: find another way to get the sequence probs at sample time
 
         word_probs = self.probs(readouts)
         word_probs = tensor.log(word_probs)
@@ -322,14 +389,15 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
         # reshape to (batch, time, prob), then sum over the batch dimension
         # to get sequence-level probability
         actual_probs = actual_probs.dimshuffle(1,0,2)
-        # we are first summing over vocabulary (only one non-zero cell per row)
+        # we are first summing over vocabulary (only one non-zero cell per row), just reduces dim by 1
         sequence_probs = actual_probs.sum(axis=2)
         sequence_probs = sequence_probs * target_samples_mask
-        # now sum over time dimension
+
+        # TODO: normalize sequence probs??
+        # now sum over time dimension (because we're in log domain)
         sequence_probs = sequence_probs.sum(axis=1)
 
         # reshape and do exp() to get the true probs back
-        # sequence_probs = tensor.exp(sequence_probs.reshape(scores.shape))
         sequence_probs = sequence_probs.reshape(scores.shape)
 
         # Note that the smoothing constant can be set by user

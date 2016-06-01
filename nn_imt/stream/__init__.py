@@ -123,7 +123,8 @@ class IMTSampleStreamTransformer:
         suffix = data[3] # in IMT, the suffix is the reference
 
         # each sample may be of different length
-        samples = self.sample_func(numpy.array(source), numpy.array(prefix), self.num_samples)
+        samples, seq_probs = self.sample_func(numpy.array(source), numpy.array(prefix), self.num_samples)
+        assert len(samples) == len(seq_probs), 'we must have one probability score per sample'
 
         # TODO: here we need to check for (1) duplicate samples, and (2) add the reference to the sample set
         # TODO: finding non-duplicate samples could loop infinitely, so we should add a max_tries param
@@ -143,13 +144,23 @@ class IMTSampleStreamTransformer:
 
         filtered_scores = numpy.array(filtered_scores, dtype='float32')
 
+        # WORKING: see if we can ever catch a nan here
+        test_probs = (seq_probs**0.005) / (seq_probs**0.005).sum()
+        test_expectations = (test_probs * filtered_scores).sum()
+        print('expected score for this sample: {}'.format(test_expectations))
+
+        try:
+            assert numpy.any(numpy.isnan(test_expectations)) == False, 'there must _not_ be any nans in the expected scores'
+        except AssertionError:
+            import ipdb;ipdb.set_trace()
+
         print('source: {}'.format(source))
         print('prefix: {}'.format(prefix))
         print('suffix: {}'.format(suffix))
         print('samples: {}'.format(samples))
         print('scores: {}'.format(filtered_scores))
 
-        return (samples, filtered_scores)
+        return (samples, seq_probs, filtered_scores)
 
     # Note that many sentence-level metrics like BLEU can be computed directly over the indexes (not the strings),
     # Note that some sentence-level metrics like METEOR require the string representation
@@ -373,4 +384,15 @@ class CopySourceAndPrefixNTimes(Transformer):
                 batch_with_expanded_source.append(source_batch)
 
         return tuple(batch_with_expanded_source)
+
+
+# WORKING: filter which removes instances with only very good or only very bad samples
+def filter_by_sample_score(data_tuple, max_score=0.9, min_score=0.05):
+    """Assumes scores are the last element in the datastream tuple."""
+
+    scores = data_tuple[-1]
+    avg_score = numpy.mean(scores)
+    if avg_score > max_score or avg_score < min_score:
+        return False
+    return True
 

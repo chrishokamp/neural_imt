@@ -48,23 +48,59 @@ class SampleFunc:
 
         # the output is [seq_len, batch]
         # Note: we used model.get_theano_function to create the theano func
-        _1, outputs, _2, _3, costs = self.sample_func(source_inputs, prefix_inputs)
-        outputs = outputs.T
+
+        num_tries = 10
+        final_outputs = {}
+        for _ in range(num_tries):
+            if len(final_outputs) == num_samples:
+                break
+            _1, outputs, _2, _3, costs, word_probs = self.sample_func(source_inputs, prefix_inputs)
+            word_probs = word_probs.transpose(1,0,2)
+            for i,output in enumerate(outputs.T.tolist()):
+                # convert word_probs to (batch, time, features)
+                if tuple(output) not in final_outputs and len(final_outputs) != num_samples:
+                    final_outputs[tuple(output)] = word_probs[i]
+
+        outputs, word_probs = zip(*final_outputs.items())
+
+        # if we didn't find enough unique samples, just sample again and use them all
+        if len(outputs) < num_samples:
+            _1, outputs, _2, _3, costs, word_probs = self.sample_func(source_inputs, prefix_inputs)
+            # convert word_probs to (batch, time, features)
+            outputs = outputs.T.tolist()
+            word_probs = word_probs.transpose(1,0,2).tolist()
+
+        try:
+            assert len(outputs) == num_samples == len(word_probs), 'we must get the correct number of samples'
+        except AssertionError:
+            import ipdb;ipdb.set_trace()
+
+        # get the probabilities of the words that were chosen
+        sampled_word_probs = numpy.array([[word_probs[i][j][v] for j,v in enumerate(s)]
+                                          for i, s in enumerate(outputs)])
 
         # TODO: this step could be avoided by computing the samples mask in a different way
         lens = self._get_true_length(outputs)
-        samples = [s[:l] for s,l in zip(outputs.tolist(), lens)]
+        samples = [s[:l] for s,l in zip(outputs, lens)]
 
-        return samples
+        # Note: normalize by sequence-length? (probably not)
+        true_word_probs = [c[:l] for c,l in zip(sampled_word_probs, lens)]
+        log_seq_probs = [numpy.sum(numpy.log(s)) for s in true_word_probs]
+        # Note: stay in log domain or not?? -- probably doesn't matter since we can't use this in a graph anyway
+        seq_probs = numpy.array([numpy.exp(s) for s in log_seq_probs], dtype='float32')
 
-    def _get_true_length(self, seqs):
+        return samples, seq_probs
+
+    def _get_true_length(self, seqs, seq_cutoff=1):
         try:
             lens = []
-            for r in seqs.tolist():
+            if type(seqs) is not list:
+                seqs = list(seqs)
+            for r in seqs:
                 lens.append(r.index(self.vocab['</S>']) + 1)
             return lens
         except ValueError:
-            return [seqs.shape[1] for _ in range(seqs.shape[0])]
+            return [seq_cutoff for _ in range(len(seqs))]
 
 
 class SamplingBase(object):
@@ -580,12 +616,12 @@ class MeteorValidator(SimpleExtension, SamplingBase):
 class IMT_F1_Validator(SimpleExtension, SamplingBase):
     """Implements early stopping based on METEOR score."""
 
-    def __init__(self, source_sentence, initial_state_context, samples, model, data_stream,
+    def __init__(self, source_sentence, target_prefix, samples, model, data_stream,
                  config, src_vocab=None, trg_vocab=None, n_best=1, track_n_models=1,
                  normalize=True, **kwargs):
         super(IMT_F1_Validator, self).__init__(**kwargs)
         self.source_sentence = source_sentence
-        self.initial_context = initial_state_context
+        self.target_prefix = target_prefix
 
         self.src_vocab = src_vocab
         self.trg_vocab = trg_vocab

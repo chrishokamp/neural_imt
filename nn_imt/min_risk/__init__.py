@@ -45,7 +45,8 @@ from nn_imt.model import NMTPrefixDecoder
 from nn_imt.sample import SampleFunc
 
 from nn_imt.stream import (PrefixSuffixStreamTransformer, CopySourceAndTargetToMatchPrefixes,
-                           IMTSampleStreamTransformer, CopySourceAndPrefixNTimes, get_dev_stream_with_prefixes)
+                           IMTSampleStreamTransformer, CopySourceAndPrefixNTimes,
+			   get_dev_stream_with_prefixes, filter_by_sample_score)
 from nn_imt.evaluation import sentence_level_imt_f1
 
 try:
@@ -57,7 +58,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# TODO: remember the `loss_function` param -- make sure this isnt overloaded
+# WORKING: searching for NaN cause
+import theano
+theano.config.optimizer = 'None'
+theano.config.traceback.limit = 30
+
 
 # TODO: where do the variables of this model get set?
 # Note: this is to create the sampling model -- the cost model gets built from the output of this function
@@ -85,6 +90,11 @@ def get_sampling_model_and_input(exp_config):
     sampling_source_representation = encoder.apply(
         sampling_source_input, tensor.ones(sampling_source_input.shape))
 
+    # WORKING: get the costs (logprobs) from here
+    # WORKING: make a theano variable for the costs, pass it to expected_cost
+    # WORKING: how _exactly_ are the costs computed?
+    # return (next_states + [next_outputs] +
+    #         list(next_glimpses.values()) + [next_costs])
     generated = decoder.generate(sampling_source_input,
                                  sampling_source_representation,
                                  target_prefix=sampling_prefix_input)
@@ -96,7 +106,7 @@ def get_sampling_model_and_input(exp_config):
     # TODO: update clients with sampling_context_input
     return sampling_model, sampling_source_input, sampling_prefix_input, encoder, decoder, generated
 
-# WORKING: remember that the min-risk streams are totally different
+
 def setup_model_and_stream(exp_config, source_vocab, target_vocab):
 
     # TODO: this line is a mess
@@ -183,7 +193,11 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
                                                           sentence_level_bleu,
                                                           num_samples=exp_config['n_samples'])
 
-    training_stream = Mapping(training_stream, sampling_transformer, add_sources=('samples', 'scores'))
+    training_stream = Mapping(training_stream, sampling_transformer, add_sources=('samples', 'seq_probs', 'scores'))
+
+    # now filter out segments whose samples are too good or too bad
+    training_stream = Filter(training_stream,
+                             predicate=filter_by_sample_score)
 
     # Now make a very big batch that we can shuffle
     # Build a batched version of stream to read k batches ahead
@@ -218,6 +232,7 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
 
     # Pad sequences that are short
     # TODO: is it correct to blindly pad the target_prefix and the target_suffix?
+    # Note: we shouldn't need to pad the seq_probs because there is only one per sequence
     masked_stream = PaddingWithEOS(
         expanded_source_stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
         mask_sources=('source', 'target', 'target_prefix', 'target_suffix', 'samples'))
@@ -356,6 +371,19 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
                           normalize=exp_config['normalized_bleu'],
                           every_n_batches=exp_config['bleu_val_freq']))
 
+    if exp_config.get('imt_f1_validation', None) is not None:
+        logger.info("Building imt F1 validator")
+        extensions.append(
+            IMT_F1_Validator(theano_sampling_source_input, theano_sampling_context_input,
+                             samples=samples,
+                             config=exp_config,
+                             model=search_model, data_stream=dev_stream,
+                             src_vocab=source_vocab,
+                             trg_vocab=target_vocab,
+                             normalize=exp_config['normalized_bleu'],
+                             every_n_batches=exp_config['bleu_val_freq']))
+
+
 
     # Add early stopping based on Meteor
     # if exp_config.get('meteor_directory', None) is not None:
@@ -377,7 +405,7 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
     # Plot cost in bokeh if necessary
     if use_bokeh and BOKEH_AVAILABLE:
         extensions.append(
-            Plot(exp_config['model_save_directory'], channels=[['decoder_cost_cost', 'validation_set_bleu_score', 'validation_set_meteor_score']],
+            Plot(exp_config['model_save_directory'], channels=[['decoder_cost_cost', 'validation_set_imt_f1_score', 'validation_set_bleu_score', 'validation_set_meteor_score']],
                  every_n_batches=10))
 
     # Set up training algorithm
@@ -385,15 +413,23 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
 
     # if there is l2_regularization, dropout or random noise, we need to use the output of the modified graph
     # WORKING: try to catch and fix nan
-    from theano.compile.nanguardmode import NanGuardMode
     if exp_config['dropout'] < 1.0:
-        algorithm = GradientDescent(
-            cost=cg.outputs[0], parameters=cg.parameters,
-            step_rule=CompositeRule([StepClipping(exp_config['step_clipping']),
-                                     eval(exp_config['step_rule'])()]),
-            on_unused_sources='warn',
-            theano_func_kwargs={'mode': NanGuardMode(nan_is_error=True, inf_is_error=True)}
-        )
+        if exp_config.get('nan_guard', False):
+            from theano.compile.nanguardmode import NanGuardMode
+            algorithm = GradientDescent(
+                cost=cg.outputs[0], parameters=cg.parameters,
+                step_rule=CompositeRule([StepClipping(exp_config['step_clipping']),
+                                         eval(exp_config['step_rule'])()]),
+                on_unused_sources='warn',
+                theano_func_kwargs={'mode': NanGuardMode(nan_is_error=True, inf_is_error=True)}
+            )
+        else:
+            algorithm = GradientDescent(
+                cost=cg.outputs[0], parameters=cg.parameters,
+                step_rule=CompositeRule([StepClipping(exp_config['step_clipping']),
+                                         eval(exp_config['step_rule'])()]),
+                on_unused_sources='warn'
+            )
     else:
         algorithm = GradientDescent(
             cost=cost, parameters=cg.parameters,
@@ -401,14 +437,6 @@ def main(exp_config, source_vocab, target_vocab, use_bokeh=True):
                                      eval(exp_config['step_rule'])()]),
             on_unused_sources='warn'
         )
-
-    #algorithm = GradientDescent(
-    #    cost=cost, parameters=cg.parameters,
-    #    step_rule=CompositeRule([StepClipping(config['step_clipping']),
-    #                             eval(config['step_rule'])()],
-    #                           ),
-    #    on_unused_sources='warn'
-    #)
 
     # enrich the logged information
     extensions.append(

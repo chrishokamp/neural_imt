@@ -107,7 +107,7 @@ class IMTSampleStreamTransformer:
 
     """
 
-    def __init__(self, sample_func, score_func, num_samples=1, max_value=0.99, min_value=0.01, **kwargs):
+    def __init__(self, sample_func, score_func, num_samples=1, max_value=0.99, min_value=0.1, **kwargs):
         self.sample_func = sample_func
         self.score_func = score_func
         self.num_samples = num_samples
@@ -132,6 +132,7 @@ class IMTSampleStreamTransformer:
 
         # Note: we currently have to pass the source because of the interface to mteval_v13
         scores = self._compute_scores(source, suffix, samples, **self.kwargs)
+        print('raw scores for this sample: {}'.format(scores))
 
         filtered_scores = []
         for i,s in enumerate(scores):
@@ -143,6 +144,7 @@ class IMTSampleStreamTransformer:
                 filtered_scores.append(s)
 
         filtered_scores = numpy.array(filtered_scores, dtype='float32')
+        print('filtered scores for this sample: {}'.format(scores))
 
         # WORKING: see if we can ever catch a nan here
         test_probs = (seq_probs**0.005) / (seq_probs**0.005).sum()
@@ -387,7 +389,8 @@ class CopySourceAndPrefixNTimes(Transformer):
 
 
 # WORKING: filter which removes instances with only very good or only very bad samples
-def filter_by_sample_score(data_tuple, max_score=0.9, min_score=0.05):
+# note that our scores are 1-metric, so a very high score is very bad
+def filter_by_sample_score(data_tuple, max_score=0.98, min_score=0.1):
     """Assumes scores are the last element in the datastream tuple."""
 
     scores = data_tuple[-1]

@@ -59,9 +59,9 @@ logger = logging.getLogger(__name__)
 
 
 # WORKING: searching for NaN cause
-import theano
-theano.config.optimizer = 'None'
-theano.config.traceback.limit = 30
+#import theano
+#theano.config.optimizer = 'None'
+#theano.config.traceback.limit = 30
 
 
 # TODO: where do the variables of this model get set?
@@ -162,12 +162,6 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     # flatten the stream back out into (source, target, target_prefix, target_suffix)
     training_stream = Unpack(training_stream)
 
-# Filter sequences that are too long
-# TODO: the logic would need to be modified to use this filter w/ context features
-# training_stream = Filter(training_stream,
-#                          predicate=_too_long(seq_len=exp_config['seq_len']))
-
-
     # METEOR
     trg_ivocab = {v:k for k,v in trg_vocab.items()}
 
@@ -196,8 +190,8 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     training_stream = Mapping(training_stream, sampling_transformer, add_sources=('samples', 'seq_probs', 'scores'))
 
     # now filter out segments whose samples are too good or too bad
-    training_stream = Filter(training_stream,
-                             predicate=filter_by_sample_score)
+    #training_stream = Filter(training_stream,
+    #                         predicate=filter_by_sample_score)
 
     # Now make a very big batch that we can shuffle
     # Build a batched version of stream to read k batches ahead

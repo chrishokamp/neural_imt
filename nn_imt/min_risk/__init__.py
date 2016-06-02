@@ -190,8 +190,8 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     training_stream = Mapping(training_stream, sampling_transformer, add_sources=('samples', 'seq_probs', 'scores'))
 
     # now filter out segments whose samples are too good or too bad
-    #training_stream = Filter(training_stream,
-    #                         predicate=filter_by_sample_score)
+    training_stream = Filter(training_stream,
+                             predicate=filter_by_sample_score)
 
     # Now make a very big batch that we can shuffle
     # Build a batched version of stream to read k batches ahead

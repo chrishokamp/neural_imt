@@ -30,8 +30,8 @@ from blocks.bricks.sequence_generators import BaseSequenceGenerator
 
 from picklable_itertools.extras import equizip
 
-# theano.config.optimizer = 'None'
-# theano.config.traceback.limit = 20
+#theano.config.optimizer = 'None'
+#theano.config.traceback.limit = 20
 
 # WORKING: optionally return the generation probability of samples from this method
 # change the expected_cost computation to take the scores as input
@@ -129,6 +129,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         #     existing_contexts = super(PartialSequenceGenerator, self)._context_names
         #     return existing_contexts + ['target_prefix']
 
+    # WORKING: add the option to scale the costs by their postion in the sequence, earlier positions are more important
     @application
     def cost_matrix(self, application_call, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns word-level cross-entropy generation costs for output sequences, conditioned
@@ -194,6 +195,17 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))
         costs = self.readout.cost(readouts, outputs)
+
+        # WORKING: scale costs by position 
+        # TODO: make this optional
+        # idea: tile an arange to match the shape of costs, then scale by reciprocal of position
+        idx_range = tensor.arange(1, costs.shape[-1] + 1)
+        position_coeffs = 1. / tensor.tile(idx_range, [costs.shape[0], 1])
+
+        # scale costs by word position
+        costs *= position_coeffs
+
+
         if mask is not None:
             costs *= mask
 
@@ -518,6 +530,9 @@ class NMTPrefixDecoder(Initializable):
                 fork=Fork([name for name in self.transition.apply.sequences
                            if name != 'mask'], prototype=Linear())
             )
+            # the name is important, because it lets us match the brick hierarchy names for the vanilla SequenceGenerator
+            # to load pretrained models
+            self.sequence_generator.name = 'sequencegenerator'
         elif loss_function == 'min_risk':
             self.sequence_generator = MinRiskPartialSequenceGenerator(
                 readout=readout,

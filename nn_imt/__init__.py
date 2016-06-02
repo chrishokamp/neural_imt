@@ -20,7 +20,6 @@ from blocks.initialization import IsotropicGaussian, Orthogonal, Constant
 from blocks.main_loop import MainLoop
 from blocks.model import Model
 from blocks.select import Selector
-from blocks.search import BeamSearch
 from blocks_extras.extensions.plot import Plot
 
 from machine_translation.checkpoint import CheckpointNMT, LoadNMT
@@ -28,10 +27,11 @@ from machine_translation.model import BidirectionalEncoder
 
 from machine_translation.stream import _ensure_special_tokens
 
-from nn_imt.sample import BleuValidator, Sampler, SamplingBase
+from nn_imt.sample import BleuValidator, Sampler, SamplingBase, IMT_F1_Validator
 from nn_imt.model import NMTPrefixDecoder
 from nn_imt.stream import map_pair_to_imt_triples, get_dev_stream_with_prefixes
 from nn_imt.evaluation import imt_f1
+from nn_imt.search import BeamSearch
 
 try:
     from blocks_extras.extensions.plot import Plot
@@ -175,8 +175,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                     src_vocab_size=config['src_vocab_size']))
 
     # Add early stopping based on bleu
-    # TODO: add IMT BLEU early stopping with prefix decoding
-    import ipdb;ipdb.set_trace()
     if config['bleu_script'] is not None:
         logger.info("Building bleu validator")
         extensions.append(
@@ -188,6 +186,17 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                           every_n_batches=config['bleu_val_freq']))
 
     # TODO: add IMT meteor early stopping
+    if config.get('imt_f1_validation', None) is not None:
+        logger.info("Building imt F1 validator")
+        extensions.append(
+            IMT_F1_Validator(sampling_input, sampling_prefix,
+                             samples=samples,
+                             config=config,
+                             model=search_model, data_stream=dev_stream,
+                             src_vocab=source_vocab,
+                             trg_vocab=target_vocab,
+                             normalize=config['normalized_bleu'],
+                             every_n_batches=config['bleu_val_freq']))
 
     # Reload model if necessary
     if config['reload']:
@@ -443,12 +452,27 @@ class IMTPredictor:
 
             prefix_input_ = numpy.tile(prefix_seq, (self.exp_config['beam_size'], 1))
             # draw sample, checking to ensure we don't get an empty string back
-            trans, costs = \
+            # WORKING: get the glimpses
+            trans, costs, glimpses = \
                 self.beam_search.search(
                     input_values={self.source_sampling_input: input_,
                                   self.target_sampling_input: prefix_input_},
                     max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
                     ignore_first_eol=False)
+
+            # WORKING: for each target word, print the closest aligned source word
+            window_size = 1
+            top_n = 3
+            for i,t_seq in enumerate(trans):
+                for j,w in enumerate(t_seq):
+                    weights_ij = glimpses[i][j]
+                    aligned_word = numpy.argmax(weights_ij)
+                    top_n_aligned_words = numpy.argsort(weights_ij)[::-1][:top_n]
+                    top_n_src_idxs = [seq[s] for s in top_n_aligned_words]
+                    src_aligned_idx_window = seq[aligned_word-window_size:aligned_word+window_size+1]
+                    # print('aligned window: {}'.format((self.trg_ivocab[w], [self.src_ivocab[sw] for sw in src_aligned_idx_window])))
+                    # print('top n aligned: {}'.format((self.trg_ivocab[w], [self.src_ivocab[sw] for sw in top_n_src_idxs])))
+            # import ipdb;ipdb.set_trace()
 
         else:
             # draw sample, checking to ensure we don't get an empty string back

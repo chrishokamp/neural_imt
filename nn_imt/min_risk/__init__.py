@@ -37,7 +37,7 @@ from machine_translation.checkpoint import CheckpointNMT, LoadNMT
 from machine_translation.model import BidirectionalEncoder
 
 from machine_translation.evaluation import sentence_level_bleu, sentence_level_meteor
-from machine_translation.stream import (get_textfile_stream, _too_long, _oov_to_unk, _length,
+from machine_translation.stream import (get_textfile_stream, _too_long, _oov_to_unk,
                                         ShuffleBatchTransformer, PaddingWithEOS, FlattenSamples)
 
 from nn_imt.sample import BleuValidator, IMT_F1_Validator, Sampler, SamplingBase
@@ -45,8 +45,8 @@ from nn_imt.model import NMTPrefixDecoder
 from nn_imt.sample import SampleFunc
 
 from nn_imt.stream import (PrefixSuffixStreamTransformer, CopySourceAndTargetToMatchPrefixes,
-                           IMTSampleStreamTransformer, CopySourceAndPrefixNTimes,
-			   get_dev_stream_with_prefixes, filter_by_sample_score)
+                           IMTSampleStreamTransformer, CopySourceAndPrefixNTimes, _length,
+			               filter_by_sample_score)
 from nn_imt.evaluation import sentence_level_imt_f1
 
 try:

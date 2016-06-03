@@ -530,6 +530,7 @@ class IMTPredictor:
                 trans_out = trans_out.strip()
 
             logger.info("Source: {}".format(src_in))
+            logger.info("Prefix: {}".format(target_prefix))
             logger.info("Target Hypothesis: {}".format(trans_out))
 
             best_n_hyps.append(trans_out)

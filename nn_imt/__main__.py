@@ -6,7 +6,7 @@ import codecs
 import re
 import os
 import time
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, check_output
 
 from machine_translation import configurations
 
@@ -146,6 +146,7 @@ if __name__ == "__main__":
         evaluation_metrics = config_obj.get('evaluation_metrics', ['bleu'])
         n_best_list_metrics = set(['imt_ndcg'])
         n_best_rank = config_obj.get('n_best', None)
+        # WORKING: support imt F1 and BLEU for any N-best param (just write a new file)
         if n_best_rank > 1:
             original_metrics = set(evaluation_metrics)
             evaluation_metrics = [m for m in evaluation_metrics if m in n_best_list_metrics]
@@ -218,10 +219,25 @@ if __name__ == "__main__":
             bleu_score = float(out_parse.group()[6:])
             logger.info('BLEU SCORE: {}'.format(bleu_score))
             mb_subprocess.terminate()
+
         if 'imt_f1' in evaluation_metrics:
             translated_output_file = config_obj.get('translated_output_file', None)
             imt_f1_score, precision, recall = imt_f1_from_files(translated_output_file, references_file)
             logger.info('IMT F1 SCORE: {}, precision: {}, recall: {}'.format(imt_f1_score, precision, recall))
+
+        if 'meteor' in evaluation_metrics:
+            meteor_directory = config_obj.get('meteor_directory', None)
+            translated_output_file = config_obj.get('translated_output_file', None)
+            target_language = config_obj.get('target_lang', 'de')
+            # java -Xmx2G -jar meteor-*.jar test reference - l en - norm
+            # Note: not using the `-norm` parameter with METEOR since the references are already tokenized
+            meteor_cmd = ['java', '-Xmx4G', '-jar', os.path.join(meteor_directory, 'meteor-1.5.jar'),
+                          translated_output_file, references_file, '-l', target_language, '-norm']
+
+            meteor_output = check_output(meteor_cmd)
+            meteor_score = float(meteor_output.strip().split('\n')[-1].split()[-1])
+            logger.info('METEOR SCORE: {}'.format(meteor_score))
+
         if 'imt_ndcg' in evaluation_metrics:
             # Note: this metric requires an nbest list with rank > 1
             if n_best_rank is None or n_best_rank <=1:

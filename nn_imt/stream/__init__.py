@@ -12,6 +12,11 @@ from machine_translation.stream import (_ensure_special_tokens, _length, Padding
                                         ShuffleBatchTransformer)
 
 
+def _length(sentence_pair):
+    """Assumes suffix is the fourth element in the tuple."""
+    return len(sentence_pair[3])
+
+
 
 def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
     """

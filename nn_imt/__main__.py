@@ -181,7 +181,11 @@ if __name__ == "__main__":
                 sources_file = config_obj['test_set']
                 references_file = config_obj['test_gold_refs']
 
-            predictor.predict_files(sources_file, prediction_prefixes, output_file=config_obj['translated_output_file'])
+            glimpse_file = config_obj.get('glimpse_file', None)
+            source_output_file = config_obj.get('source_output_file', None)
+            predictor.predict_files(sources_file, prediction_prefixes, output_file=config_obj['translated_output_file'],
+                                    glimpse_file=glimpse_file, source_output_file=source_output_file)
+
             logger.info('Done translating, now I will evaluate the metrics: {}'.format(evaluation_metrics))
 
         logger.info("Started Evaluation: ")

@@ -351,7 +351,8 @@ class IMTPredictor:
             sentence = sentence.split()
         return [index.get(w, unknown_token) for w in sentence]
 
-    def predict_files(self, source_file, prefix_file, output_file=None):
+    # Working: add the option to output the glimpses
+    def predict_files(self, source_file, prefix_file, output_file=None, glimpse_file=False, source_output_file=None):
 
         tokenize = self.source_tokenizer_cmd is not None
         detokenize = self.detokenizer_cmd is not None
@@ -368,6 +369,8 @@ class IMTPredictor:
         total_cost = 0.0
 
         # WORKING:
+        all_nbest_glimpses = []
+        source_seqs = []
         with codecs.open(source_file, encoding='utf8') as srcs:
             with codecs.open(prefix_file, encoding='utf8') as prefixes:
 
@@ -385,13 +388,18 @@ class IMTPredictor:
                     prefix_seq = instance[1].split()
 
 
-                    translations, costs = self.predict_segment(source_seq, target_prefix=prefix_seq,
-                                                               n_best=self.n_best,
-                                                               tokenize=tokenize, detokenize=detokenize)
+                    translations, costs, glimpses, src = self.predict_segment(source_seq, target_prefix=prefix_seq,
+                                                                              n_best=self.n_best,
+                                                                              tokenize=tokenize, detokenize=detokenize)
 
                     # predict_segment returns a list of hyps, we take the best ones
                     nbest_translations = translations[:self.n_best]
                     nbest_costs = costs[:self.n_best]
+                    nbest_glimpses = glimpses[:self.n_best]
+                    source_seqs.append(src)
+
+                    # import ipdb;ipdb.set_trace()
+                    all_nbest_glimpses.append(nbest_glimpses)
 
                     if self.n_best == 1:
                         ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
@@ -407,6 +415,18 @@ class IMTPredictor:
         logger.info("Saved translated output to: {}".format(ftrans.name))
         logger.info("Total cost of the test: {}".format(total_cost))
         ftrans.close()
+
+        if glimpse_file is not None:
+            # pickle glimpses to a user-specified file
+            # import ipdb;ipdb.set_trace()
+            with open(glimpse_file, 'w') as glimpses_out:
+                numpy.save(glimpses_out, all_nbest_glimpses)
+            logger.info("Saved glimpse weights to: {}".format(glimpse_file))
+
+        if source_output_file is not None:
+            with codecs.open(source_output_file, 'w', encoding='utf8') as src_out:
+                src_out.write('\n'.join(source_seqs))
+            logger.info("Wrote source lines to: {}".format(source_output_file))
 
         return output_file
 
@@ -437,7 +457,10 @@ class IMTPredictor:
                 target_prefix, _ = target_tokenizer.communicate(target_prefix)
 
         segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
-        segment += [self.src_eos_idx]
+
+        # TODO: sometimes we need to add BOS and EOS tokens to the source, sometimes we don't, how to handle this?
+        # if segment[-1] != [self.src_eos_idx]:
+        #     segment += [self.src_eos_idx]
 
         seq = IMTPredictor.sutils._oov_to_unk(
             segment, self.exp_config['src_vocab_size'], self.unk_idx)
@@ -452,7 +475,6 @@ class IMTPredictor:
 
             prefix_input_ = numpy.tile(prefix_seq, (self.exp_config['beam_size'], 1))
             # draw sample, checking to ensure we don't get an empty string back
-            # WORKING: get the glimpses
             trans, costs, glimpses = \
                 self.beam_search.search(
                     input_values={self.source_sampling_input: input_,
@@ -460,23 +482,9 @@ class IMTPredictor:
                     max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
                     ignore_first_eol=False)
 
-            # WORKING: for each target word, print the closest aligned source word
-            window_size = 1
-            top_n = 3
-            for i,t_seq in enumerate(trans):
-                for j,w in enumerate(t_seq):
-                    weights_ij = glimpses[i][j]
-                    aligned_word = numpy.argmax(weights_ij)
-                    top_n_aligned_words = numpy.argsort(weights_ij)[::-1][:top_n]
-                    top_n_src_idxs = [seq[s] for s in top_n_aligned_words]
-                    src_aligned_idx_window = seq[aligned_word-window_size:aligned_word+window_size+1]
-                    # print('aligned window: {}'.format((self.trg_ivocab[w], [self.src_ivocab[sw] for sw in src_aligned_idx_window])))
-                    # print('top n aligned: {}'.format((self.trg_ivocab[w], [self.src_ivocab[sw] for sw in top_n_src_idxs])))
-            # import ipdb;ipdb.set_trace()
-
         else:
             # draw sample, checking to ensure we don't get an empty string back
-            trans, costs = \
+            trans, costs, glimpses = \
                 self.beam_search.search(
                     input_values={self.sampling_input: input_},
                     max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
@@ -489,17 +497,20 @@ class IMTPredictor:
 
         best_n_hyps = []
         best_n_costs = []
+        best_n_glimpses = []
         best_n_idxs = numpy.argsort(costs)[:n_best]
         for j, idx in enumerate(best_n_idxs):
             try:
                 trans_out_idxs = trans[idx]
                 cost = costs[idx]
+                glimpse = glimpses[idx]
+                # import ipdb;ipdb.set_trace()
 
                 # convert idx to words
                 # `line` is a tuple with one item
                 try:
                     assert trans_out_idxs[-1] == self.trg_eos_idx, 'Target hypothesis should end with the EOS symbol'
-                    trans_out_idxs = trans_out_idxs[:-1]
+                    # Note: that we don't strip the EOS symbol in the IMT scenario, we want the system to explicitly say when the translation is finished
                     src_in = IMTPredictor.sutils._idx_to_word(segment, self.src_ivocab)
                     trans_out = IMTPredictor.sutils._idx_to_word(trans_out_idxs, self.trg_ivocab)
                 except AssertionError as e:
@@ -523,8 +534,9 @@ class IMTPredictor:
 
             best_n_hyps.append(trans_out)
             best_n_costs.append(cost)
+            best_n_glimpses.append(glimpse)
 
-        return best_n_hyps, best_n_costs
+        return best_n_hyps, best_n_costs, best_n_glimpses, src_in
 
 
 # TODO: use the refs properly as specified in the function signature

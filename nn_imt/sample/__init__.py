@@ -48,7 +48,8 @@ class SampleFunc:
 
         # the output is [seq_len, batch]
         # Note: we used model.get_theano_function to create the theano func
-
+        # TODO: avoiding duplicates here is really messy, find a better way
+        # TODO: one option is to filter the training stream to only contain training instances which have diverse samples
         num_tries = 10
         final_outputs = {}
         for _ in range(num_tries):

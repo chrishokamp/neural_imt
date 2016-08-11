@@ -205,7 +205,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # Plot cost in bokeh if necessary
     if use_bokeh and BOKEH_AVAILABLE:
         extensions.append(
-            Plot(config['model_save_directory'], channels=[['decoder_cost_cost'], ['validation_set_bleu_score']],
+            Plot(config['model_save_directory'], channels=[['decoder_cost_cost'], ['validation_set_bleu_score', 'validation_set_imt_f1_score']],
                  every_n_batches=10))
 
     # Set up training algorithm

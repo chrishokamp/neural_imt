@@ -1,6 +1,6 @@
 import numpy
+import logging
 
-import numpy
 from fuel.datasets import TextFile
 from fuel.schemes import ConstantScheme
 from fuel.transformers import (
@@ -10,6 +10,9 @@ from six.moves import cPickle
 
 from machine_translation.stream import (_ensure_special_tokens, _length, PaddingWithEOS, _oov_to_unk, _too_long,
                                         ShuffleBatchTransformer)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def _length(sentence_pair):
@@ -73,22 +76,30 @@ class PrefixSuffixStreamTransformer:
     """
 
     def __init__(self, **kwargs):
-        pass
+        self.sample_ratio = kwargs.get('sample_ratio', 1.)
+        assert self.sample_ratio > 0. and self.sample_ratio <= 1., '0. < sample_ratio <= 1.'
 
     def __call__(self, data, **kwargs):
         source = data[0]
         reference = data[1]
 
-        # TODO: we need to pass through the information about BOS and EOS tokens
         # TODO: there is wasted computation here, since we will need to flatten the sources back out again later
         sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference,
                                                                                  bos_token=True,
                                                                                  eos_token=True,
                                                                                  **kwargs))
 
+        if self.sample_ratio < 1.:
+            num_samples = int(numpy.ceil(self.sample_ratio * len(target_prefixes)))
+            sample_idxs = numpy.random.choice(range(len(target_prefixes)), num_samples)
+        else:
+            sample_idxs = range(len(target_prefixes))
+
+        logging.info('Generating {} samples, overall len is {}'.format(len(sample_idxs), len(target_prefixes)))
+
         # Note: the cast here is important, otherwise these will become float64s which will break everything
-        target_prefixes = [numpy.array(pre).astype('int64') for pre in target_prefixes]
-        target_suffixes = [numpy.array(suf).astype('int64') for suf in target_suffixes]
+        target_prefixes = list(numpy.array([numpy.array(pre).astype('int64') for pre in target_prefixes])[sample_idxs])
+        target_suffixes = list(numpy.array([numpy.array(suf).astype('int64') for suf in target_suffixes])[sample_idxs])
 
         return (target_prefixes, target_suffixes)
 
@@ -133,7 +144,6 @@ class IMTSampleStreamTransformer:
 
         # TODO: here we need to check for (1) duplicate samples, and (2) add the reference to the sample set
         # TODO: finding non-duplicate samples could loop infinitely, so we should add a max_tries param
-
 
         # Note: we currently have to pass the source because of the interface to mteval_v13
         scores = self._compute_scores(source, suffix, samples, **self.kwargs)
@@ -204,10 +214,11 @@ class CopySourceAndTargetToMatchPrefixes(Transformer):
 
     def __call__(self, data, **kwargs):
         batch_obj = {k:v for k,v in zip(self.data_stream.sources, data)}
-        num_prefixes = len(batch_obj['target_prefix'])
 
-        batch_obj['source'] = tuple([batch_obj['source'] for _ in range(num_prefixes)])
-        batch_obj['target'] = tuple([batch_obj['target'] for _ in range(num_prefixes)])
+        num_samples = len(batch_obj['target_prefix'])
+
+        batch_obj['source'] = tuple([batch_obj['source'] for _ in range(num_samples)])
+        batch_obj['target'] = tuple([batch_obj['target'] for _ in range(num_samples)])
 
         batch_with_expanded_source_and_target = [batch_obj[k] for k in self.data_stream.sources]
 
@@ -255,7 +266,7 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
                                  trg_vocab_size=trg_vocab_size,
                                  unk_id=unk_id))
 
-    stream = Mapping(stream, PrefixSuffixStreamTransformer(),
+    stream = Mapping(stream, PrefixSuffixStreamTransformer(sample_ratio=kwargs.get('train_sample_ratio', 1.)),
                      add_sources=('target_prefix', 'target_suffix'))
 
     stream = Mapping(stream, CopySourceAndTargetToMatchPrefixes(stream))
@@ -293,9 +304,16 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
 
     # Pad sequences that are short
     # TODO: is it correct to blindly pad the target_prefix and the target_suffix?
+    # TODO: DEVELOPMENT HACK
+    kwargs['suffix_length'] = 1
+    kwargs['truncate_sources'] = ['target_suffix']
+    configurable_padding_args = {
+        'suffix_length': kwargs.get('suffix_length', None),
+        'truncate_sources': kwargs.get('truncate_sources', [])
+    }
     masked_stream = PaddingWithEOS(
         stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
-        mask_sources=('source', 'target', 'target_prefix', 'target_suffix'))
+        mask_sources=('source', 'target', 'target_prefix', 'target_suffix'), **configurable_padding_args)
 
     return masked_stream, src_vocab, trg_vocab
 
@@ -332,8 +350,8 @@ def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab
                            ('source', 'target'))
 
         # now add prefix and suffixes to this stream
-        dev_stream = Mapping(dev_stream, PrefixSuffixStreamTransformer(),
-                         add_sources=('target_prefix', 'target_suffix'))
+        dev_stream = Mapping(dev_stream, PrefixSuffixStreamTransformer(sample_ratio=kwargs.get('dev_sample_ratio', 1.)),
+                             add_sources=('target_prefix', 'target_suffix'))
 
         dev_stream = Mapping(dev_stream, CopySourceAndTargetToMatchPrefixes(dev_stream))
 

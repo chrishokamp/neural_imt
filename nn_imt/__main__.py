@@ -68,7 +68,8 @@ if __name__ == "__main__":
                 suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
                 assert len(suffix_text) > 0, 'reference cannot be empty'
                 suffix_refs.write(suffix_text + '\n')
-	dev_stream.reset()
+
+        dev_stream.reset()
 
         config_obj['val_set_grndtruth'] = suffix_ref_filename
 
@@ -89,18 +90,19 @@ if __name__ == "__main__":
 
         sampling_base = SamplingBase()
         with codecs.open(suffix_ref_filename, 'w') as suffix_refs:
-	    dev_instances = list(dev_stream.get_epoch_iterator())
-	    print('Num dev instances: {}'.format(len(dev_instances)))
+            dev_instances = list(dev_stream.get_epoch_iterator())
+            print('Num dev instances: {}'.format(len(dev_instances)))
             for l in dev_instances:
                 # currently our datastream is (source,target,prefix,suffix)
                 suffix = l[-1]
                 suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
                 assert len(suffix_text) > 0, 'reference cannot be empty'
                 suffix_refs.write(suffix_text + '\n')
-	dev_stream.reset()
+
+        dev_stream.reset()
 
         config_obj['val_set_grndtruth'] = suffix_ref_filename
-	print('Wrote suffix validation file to: {}'.format(suffix_ref_filename))
+        print('Wrote suffix validation file to: {}'.format(suffix_ref_filename))
 
         logger.info('Starting min-risk training')
         min_risk.main(config_obj, src_vocab, trg_vocab, dev_stream, use_bokeh=True)

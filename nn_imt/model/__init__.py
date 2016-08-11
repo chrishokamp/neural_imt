@@ -130,6 +130,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         #     return existing_contexts + ['target_prefix']
 
     # WORKING: add the option to scale the costs by their postion in the sequence, earlier positions are more important
+    # WORKING: train on first-word accuracy only
     @application
     def cost_matrix(self, application_call, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns word-level cross-entropy generation costs for output sequences, conditioned
@@ -199,12 +200,12 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # WORKING: scale costs by position 
         # TODO: make this optional
         # idea: tile an arange to match the shape of costs, then scale by reciprocal of position
-        idx_range = tensor.arange(1, costs.shape[-1] + 1)
-        position_coeffs = 1. / tensor.tile(idx_range, [costs.shape[0], 1])
+        # idx_range = tensor.arange(1, costs.shape[-1] + 1)
+        # position_coeffs = 1. / tensor.tile(idx_range, [costs.shape[0], 1])
 
         # scale costs by word position
-        costs *= position_coeffs
-
+        # costs *= position_coeffs
+        # WORKING: END scale costs by position
 
         if mask is not None:
             costs *= mask
@@ -562,6 +563,8 @@ class NMTPrefixDecoder(Initializable):
         target_prefix_mask = target_prefix_mask.T
 
         # Get the cost matrix
+        # WORKING: make the cost function configurable for 1st word vs whole sequence
+        # WORKING: first-word only can be done via the mask
         cost = self.sequence_generator.cost_matrix(**{
             'mask': target_sentence_mask,
             'outputs': target_sentence,

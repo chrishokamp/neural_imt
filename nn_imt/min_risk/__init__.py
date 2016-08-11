@@ -56,7 +56,7 @@ except ImportError:
     BOKEH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.DEBUG)
 
 # WORKING: searching for NaN cause
 #import theano
@@ -151,8 +151,11 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
                                           unk_id=exp_config['unk_id']))
 
     # add in the prefix and suffix seqs
-    training_stream = Mapping(training_stream, PrefixSuffixStreamTransformer(),
-                             add_sources=('target_prefix', 'target_suffix'))
+    # working: add the sample ratio
+    logger.info('Sample ratio is: {}'.format(exp_config.get('sample_ratio', 1.)))
+    training_stream = Mapping(training_stream,
+                              PrefixSuffixStreamTransformer(sample_ratio=exp_config.get('sample_ratio', 1.)),
+                                                            add_sources=('target_prefix', 'target_suffix'))
 
     training_stream = Mapping(training_stream, CopySourceAndTargetToMatchPrefixes(training_stream))
 
@@ -165,8 +168,9 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     # METEOR
     trg_ivocab = {v:k for k,v in trg_vocab.items()}
 
-    # TODO: configure min-risk score func from the yaml config
-    # TODO: implemment sentence level imt_f1 as a metric
+    # TODO: Implement smoothed BLEU
+    # TODO: Implement first-word accuracy (bilingual language model)
+
     min_risk_score_func = exp_config.get('min_risk_score_func', 'bleu')
 
     if min_risk_score_func == 'meteor':
@@ -227,9 +231,18 @@ def setup_model_and_stream(exp_config, source_vocab, target_vocab):
     # Pad sequences that are short
     # TODO: is it correct to blindly pad the target_prefix and the target_suffix?
     # Note: we shouldn't need to pad the seq_probs because there is only one per sequence
+    # TODO: DEVELOPMENT HACK
+    exp_config['suffix_length'] = 1
+    exp_config['truncate_sources'] = ['target_suffix']
+    configurable_padding_args = {
+        'suffix_length': exp_config.get('suffix_length', None),
+        'truncate_sources': exp_config.get('truncate_sources', [])
+    }
+    import ipdb; ipdb.set_trace()
     masked_stream = PaddingWithEOS(
         expanded_source_stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
-        mask_sources=('source', 'target', 'target_prefix', 'target_suffix', 'samples'))
+        mask_sources=('source', 'target', 'target_prefix', 'target_suffix', 'samples'), **configurable_padding_args
+    )
 
     return train_encoder, train_decoder, theano_sampling_source_input, theano_sampling_context_input, generated, masked_stream
 
@@ -361,7 +374,7 @@ def main(exp_config, source_vocab, target_vocab, dev_stream, use_bokeh=True):
                           normalize=exp_config['normalized_bleu'],
                           every_n_batches=exp_config['bleu_val_freq']))
 
-    if exp_config.get('imt_f1_validation', None) is not None:
+    if exp_config.get('imt_f1_validation', False) is not False:
         logger.info("Building imt F1 validator")
         extensions.append(
             IMT_F1_Validator(theano_sampling_source_input, theano_sampling_context_input,

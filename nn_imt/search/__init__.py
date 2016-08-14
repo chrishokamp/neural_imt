@@ -275,8 +275,7 @@ class BeamSearch(object):
         all_masks = numpy.ones_like(all_outputs, dtype=config.floatX)
         all_costs = numpy.zeros_like(all_outputs, dtype=config.floatX)
 
-        # Chris: working here -- try to get the glimpse weights as well
-        # Chris: test getting alignment weights here
+        # Chris: get the glimpse weights as well
         prev_glimpses = states['weights'][None, :]
         all_glimpses = numpy.zeros_like(prev_glimpses, dtype=config.floatX)
 
@@ -297,7 +296,6 @@ class BeamSearch(object):
             # size is effectively only 1.
             (indexes, outputs), chosen_costs = self._smallest(
                 next_costs, beam_size, only_first_row=i == 0)
-
 
             # Rearrange everything
             for name in states:

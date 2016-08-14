@@ -53,7 +53,7 @@ if __name__ == "__main__":
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
         dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
-        # HACK THE VALIDATION
+        # HACK TO CREATE THE VALIDATION DATASET
         trg_ivocab = {v: k for k, v in trg_vocab.items()}
         if not os.path.isdir(config_obj['model_save_directory']):
             os.mkdir(config_obj['model_save_directory'])
@@ -76,12 +76,13 @@ if __name__ == "__main__":
         main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
 
     # WORKING: implement a new min-risk mode with smart and fast sampling
+    # We don't need to sample every (prefix, suffix) pair -- see Green 2016
     elif mode == 'min-risk':
         # TODO: this is currently just a hack to get the vocab
         _, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
         dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
-        # HACK THE VALIDATION
+        # HACK THE VALIDATION -- write out some files that we will need for validation & early stopping
         trg_ivocab = {v: k for k, v in trg_vocab.items()}
         if not os.path.isdir(config_obj['model_save_directory']):
             os.mkdir(config_obj['model_save_directory'])
@@ -248,6 +249,24 @@ if __name__ == "__main__":
             translated_output_file = config_obj.get('translated_output_file', None)
             imt_ndcg_score = imt_ndcg_from_files(translated_output_file, references_file)
             logger.info('IMT_NDCG SCORE: {}'.format(imt_ndcg_score))
+
+    # WORKING: train a model of next-word confidence: how sure am I that the next word is correct, given what came before?
+    elif mode == 'confidence':
+        # confidence 'score' is classification accuracy (RIGHT/WRONG) on the dev set
+        # load the trained model
+        # to create training minibatches:
+        #     - get the suffix prediction for (source, prefix) pairs, compare to reference to get the TRUE/FALSE label
+        # to make a prediction
+        #     - compute state and glimpses given (source, prefix)
+        #     - use the readout brick's output, but with 2d output dimension -- i.e. make the output softmax a 2-d RIGHT/WRONG prediction
+        #     - thus the model learns which things it's good at predicting, and which it's not
+        #     - Question: can we use the same training data as we used to train the translation model, or should we use something different?
+        # - note that if we are just training the confidence model, it would be faster to pre-translate
+
+        # To evaluate dynamic confidence, we want to know how it performs against IMT F1, or IMT NDCG
+
+
+        pass
 
 
     elif mode == 'server':

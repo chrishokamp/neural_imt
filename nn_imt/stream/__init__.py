@@ -20,7 +20,6 @@ def _length(sentence_pair):
     return len(sentence_pair[3])
 
 
-
 def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
     """
     Map a (source, reference) pair into (len(actual_reference) + 2) new examples
@@ -77,7 +76,15 @@ class PrefixSuffixStreamTransformer:
 
     def __init__(self, **kwargs):
         self.sample_ratio = kwargs.get('sample_ratio', 1.)
+        # WORKING: add the ability to always generate the same samples by resetting the seed
         assert self.sample_ratio > 0. and self.sample_ratio <= 1., '0. < sample_ratio <= 1.'
+
+        self.random_seed = kwargs.get('random_seed', 42)
+        self.random_state = numpy.random.RandomState(self.random_seed)
+
+        # whether we should always generate the same samples
+        self.static_samples = kwargs.get('static_samples', False)
+
 
     def __call__(self, data, **kwargs):
         source = data[0]
@@ -91,7 +98,7 @@ class PrefixSuffixStreamTransformer:
 
         if self.sample_ratio < 1.:
             num_samples = int(numpy.ceil(self.sample_ratio * len(target_prefixes)))
-            sample_idxs = numpy.random.choice(range(len(target_prefixes)), num_samples)
+            sample_idxs = self.random_state.choice(range(len(target_prefixes)), num_samples)
         else:
             sample_idxs = range(len(target_prefixes))
 
@@ -100,6 +107,12 @@ class PrefixSuffixStreamTransformer:
         # Note: the cast here is important, otherwise these will become float64s which will break everything
         target_prefixes = list(numpy.array([numpy.array(pre).astype('int64') for pre in target_prefixes])[sample_idxs])
         target_suffixes = list(numpy.array([numpy.array(suf).astype('int64') for suf in target_suffixes])[sample_idxs])
+
+        #if user wants static samples, reset the random state so that the samples will be the same next time around
+        # TODO: this won't work, we actually want to reset it after a complete epoch
+        # TODO: check calls to reset()? possibly overload that
+        if self.static_samples == True:
+            self.random_state = numpy.random.RandomState(self.random_seed)
 
         return (target_prefixes, target_suffixes)
 
@@ -304,13 +317,12 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
 
     # Pad sequences that are short
     # TODO: is it correct to blindly pad the target_prefix and the target_suffix?
-    # TODO: DEVELOPMENT HACK
-    kwargs['suffix_length'] = 1
-    kwargs['truncate_sources'] = ['target_suffix']
     configurable_padding_args = {
         'suffix_length': kwargs.get('suffix_length', None),
         'truncate_sources': kwargs.get('truncate_sources', [])
     }
+    logger.info('Training suffix length is: {}'.format(configurable_padding_args['suffix_length']))
+    logger.info('I will pad the following sources after <suffix_length>: {}'.format(configurable_padding_args['truncate_sources']))
     masked_stream = PaddingWithEOS(
         stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
         mask_sources=('source', 'target', 'target_prefix', 'target_suffix'), **configurable_padding_args)
@@ -365,6 +377,57 @@ def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab
     else:
         return dev_stream
 
+
+# WORKING: same as get_dev_stream_with_prefixes, but user provides the prefix file directly
+# EVALUATE on 1000 samples
+#'test_set': '/media/1tb_drive/imt_models/newstest_2014_evaluation/newstest2014_1000_samples/reference_prefixes.generated.sources.1000.samples'
+#'test_prefixes': '/media/1tb_drive/imt_models/newstest_2014_evaluation/newstest2014_1000_samples/reference_prefixes.generated.1000.samples'
+#'test_gold_refs': '/media/1tb_drive/imt_models/newstest_2014_evaluation/newstest2014_1000_samples/reference_suffixes.generated.1000.samples'
+def get_dev_stream_with_prefix_file(val_set=None, val_set_grndtruth=None, val_set_prefixes=None, val_set_suffixes=None,
+                                    src_vocab=None, src_vocab_size=30000, trg_vocab=None, trg_vocab_size=30000, unk_id=1,
+                                    return_vocab=False, **kwargs):
+    """Setup development stream with user-provided source, target, prefixes, and suffixes"""
+
+    dev_stream = None
+    if val_set is not None and val_set_grndtruth is not None and val_set_prefixes is not None:
+        src_vocab = _ensure_special_tokens(
+            src_vocab if isinstance(src_vocab, dict) else
+            cPickle.load(open(src_vocab)),
+            bos_idx=0, eos_idx=src_vocab_size - 1, unk_idx=unk_id)
+
+        trg_vocab = _ensure_special_tokens(
+            trg_vocab if isinstance(trg_vocab, dict) else
+            cPickle.load(open(trg_vocab)),
+            bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
+
+        # Note: user should have already provided EOS and BOS tokens in the data representation
+        dev_source_dataset = TextFile([val_set], src_vocab,
+                                      bos_token=None,
+                                      eos_token=None,
+                                      unk_token='<UNK>')
+        dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab,
+                                      bos_token=None,
+                                      eos_token=None,
+                                      unk_token='<UNK>')
+        dev_prefix_dataset = TextFile([val_set_prefixes], trg_vocab,
+                                      bos_token=None,
+                                      eos_token=None,
+                                      unk_token='<UNK>')
+        dev_suffix_dataset = TextFile([val_set_suffixes], trg_vocab,
+                                      bos_token=None,
+                                      eos_token=None,
+                                      unk_token='<UNK>')
+
+        dev_stream = Merge([dev_source_dataset.get_example_stream(),
+                            dev_target_dataset.get_example_stream(),
+                            dev_prefix_dataset.get_example_stream(),
+                            dev_suffix_dataset.get_example_stream()],
+                           ('source', 'target','target_prefix','target_suffix'))
+
+    if return_vocab:
+        return dev_stream, src_vocab, trg_vocab
+    else:
+        return dev_stream
 
 class CopySourceAndPrefixNTimes(Transformer):
     """Duplicate the source N times to match the number of samples

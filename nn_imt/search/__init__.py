@@ -120,6 +120,7 @@ class BeamSearch(object):
         probs = VariableFilter(
             applications=[self.generator.readout.emitter.probs],
             roles=[OUTPUT])(self.inner_cg)[0]
+        # Note the negative sign here, this lets us use the logprobability as a cost to be minimized
         logprobs = -tensor.log(probs)
         self.logprobs_computer = function(
             self.contexts + self.input_states, logprobs,
@@ -336,5 +337,9 @@ class BeamSearch(object):
                    for output, mask in equizip(outputs, masks)]
         glimpses = [list(glimpse[:mask.sum()])
                     for glimpse, mask in equizip(glimpses, masks)]
-        costs = list(costs.T.sum(axis=0))
-        return outputs, costs, glimpses
+        # WORKING HERE: we want the cost for each item, not the sequence-level cost
+        # TODO: we need the sequence level cost to know which sequence is best, so return one more thing from this function
+        sequence_costs = list(costs.T.sum(axis=0))
+        word_level_costs = [list(cost[:mask.sum()])
+                   for cost, mask in equizip(costs, masks)]
+        return outputs, sequence_costs, glimpses, word_level_costs

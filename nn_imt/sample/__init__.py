@@ -237,6 +237,7 @@ class Sampler(SimpleExtension, SamplingBase):
 
 # Note: this validator depends upon us having a file of references, but for IMT the references are generated on the fly
 # Note: therefore we need to write all the suffixes to a temporary file and validate against that
+# WORKING: we actually want to evaluate against whichever samples are currently on the stream
 class BleuValidator(SimpleExtension, SamplingBase):
     """Implements early stopping based on BLEU score."""
 

@@ -13,7 +13,7 @@ from machine_translation import configurations
 import nn_imt.min_risk as min_risk
 from nn_imt import main, IMTPredictor, split_refs_into_prefix_suffix_files
 
-from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes
+from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes, get_dev_stream_with_prefix_file
 from nn_imt.sample import SamplingBase
 from nn_imt.evaluation import imt_f1_from_files, imt_ndcg_from_files
 
@@ -51,27 +51,32 @@ if __name__ == "__main__":
     if mode == 'train':
         # Get data streams and call main
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
-        dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
-        # HACK TO CREATE THE VALIDATION DATASET
-        trg_ivocab = {v: k for k, v in trg_vocab.items()}
-        if not os.path.isdir(config_obj['model_save_directory']):
-            os.mkdir(config_obj['model_save_directory'])
+        # TODO: support both modes of creating validation data -- look at the config file to see which one to use
+        dev_stream = get_dev_stream_with_prefix_file(**config_obj)
+        #dev_stream = get_dev_stream_with_prefixes(**config_obj)
+        import ipdb;ipdb.set_trace()
 
-        suffix_ref_filename = os.path.join(config_obj['model_save_directory'], 'reference_suffixes.out')
+        # HACK THE VALIDATION
+        #trg_ivocab = {v: k for k, v in trg_vocab.items()}
+        #if not os.path.isdir(config_obj['model_save_directory']):
+        #    os.mkdir(config_obj['model_save_directory'])
 
-        sampling_base = SamplingBase()
-        with codecs.open(suffix_ref_filename, 'w') as suffix_refs:
-            for l in list(dev_stream.get_epoch_iterator()):
-                # currently our datastream is (source,target,prefix,suffix)
-                suffix = l[-1]
-                suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
-                assert len(suffix_text) > 0, 'reference cannot be empty'
-                suffix_refs.write(suffix_text + '\n')
+        #suffix_ref_filename = os.path.join(config_obj['model_save_directory'], 'reference_suffixes.out')
 
-        dev_stream.reset()
+        #sampling_base = SamplingBase()
+        #with codecs.open(suffix_ref_filename, 'w') as suffix_refs:
+        #    for l in list(dev_stream.get_epoch_iterator()):
+        #        # currently our datastream is (source,target,prefix,suffix)
+        #        suffix = l[-1]
+        #        suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
+        #        assert len(suffix_text) > 0, 'reference cannot be empty'
+        #        suffix_refs.write(suffix_text + '\n')
 
-        config_obj['val_set_grndtruth'] = suffix_ref_filename
+        #dev_stream.reset()
+
+        #config_obj['val_set_grndtruth'] = suffix_ref_filename
+        # END HACKING THE VALIDATION
 
         main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
 
@@ -181,14 +186,18 @@ if __name__ == "__main__":
                 sources_file, prediction_prefixes, references_file = split_refs_into_prefix_suffix_files(prediction_refs,
                                                                                                          config_obj,
                                                                                                          n_best=n_best_rank)
+
+                import ipdb; ipdb.set_trace()
             else:
                 sources_file = config_obj['test_set']
                 references_file = config_obj['test_gold_refs']
 
             glimpse_file = config_obj.get('glimpse_file', None)
+            word_level_cost_file = config_obj.get('word_level_cost_file', None)
             source_output_file = config_obj.get('source_output_file', None)
             predictor.predict_files(sources_file, prediction_prefixes, output_file=config_obj['translated_output_file'],
-                                    glimpse_file=glimpse_file, source_output_file=source_output_file)
+                                    glimpse_file=glimpse_file, word_level_cost_file=word_level_cost_file,
+                                    source_output_file=source_output_file)
 
             logger.info('Done translating, now I will evaluate the metrics: {}'.format(evaluation_metrics))
 

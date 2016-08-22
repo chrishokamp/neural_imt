@@ -12,6 +12,50 @@ def sentence_level_imt_f1(src, ref, samples, **kwargs):
     return one_minus_scores
 
 
+def wpa(hyp, ref):
+    """
+    compute first word prediction accuracy
+
+    :returns: 1. if first word is correct, 0. otherwise
+
+    """
+
+    # if both are empty, this is a perfect match
+    if len(hyp) == 0 and len(ref) == 0:
+        return 1.
+
+    if hyp[0] == ref[0]:
+        return 1.
+    else:
+        return 0.
+
+
+def wpa_from_files(hyp_file, ref_file):
+    """
+    Compute average IMT F1 over the provided files
+    :param hyp_file:
+    :param ref_file:
+    :return:
+
+    Note: input files are assumed to be whitespace-tokenized, if this isn't the case this metric will be wrong
+
+    """
+
+    with codecs.open(hyp_file, encoding='utf8') as hyp_f:
+        hyps = hyp_f.read().strip().split('\n')
+        hyps = [l.split() for l in hyps]
+
+        with codecs.open(ref_file, encoding='utf8') as ref_f:
+            refs = ref_f.read().strip().split('\n')
+            refs = [l.split() for l in refs]
+
+    scores = []
+    for hyp, ref in zip(hyps, refs):
+        scores.append(wpa(hyp, ref))
+
+    return numpy.mean(scores)
+
+
 def imt_f1(hyp, ref):
     """
     compute Ueffing and Ney F1 for IMT

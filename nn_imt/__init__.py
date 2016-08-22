@@ -185,6 +185,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                           normalize=config['normalized_bleu'],
                           every_n_batches=config['bleu_val_freq']))
 
+    # TODO: add first-word accuracy validation
     # TODO: add IMT meteor early stopping
     if config.get('imt_f1_validation', None) is not None:
         logger.info("Building imt F1 validator")
@@ -351,8 +352,6 @@ class IMTPredictor:
             sentence = sentence.split()
         return [index.get(w, unknown_token) for w in sentence]
 
-    # WORKING: output the cost at each time step (aka the log prob)
-    # WORKING: one option is just to print the whole cost vector instead of summing it
     def predict_files(self, source_file, prefix_file, output_file=None, glimpse_file=None, word_level_cost_file=None,
                       source_output_file=None):
 
@@ -388,7 +387,6 @@ class IMTPredictor:
                     # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
                     source_seq = instance[0].split()
                     prefix_seq = instance[1].split()
-
 
                     translations, costs, glimpses, word_level_costs, src = self.predict_segment(source_seq, target_prefix=prefix_seq,
                                                                               n_best=self.n_best,

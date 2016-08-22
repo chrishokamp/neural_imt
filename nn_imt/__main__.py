@@ -15,7 +15,7 @@ from nn_imt import main, IMTPredictor, split_refs_into_prefix_suffix_files
 
 from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes, get_dev_stream_with_prefix_file
 from nn_imt.sample import SamplingBase
-from nn_imt.evaluation import imt_f1_from_files, imt_ndcg_from_files
+from nn_imt.evaluation import imt_f1_from_files, imt_ndcg_from_files, wpa_from_files
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -143,12 +143,6 @@ if __name__ == "__main__":
         logger.info("Started Evaluation: ")
         val_start_time = time.time()
 
-        # TODO: support evaluation for IMT
-        # WORKING: IMT evaluation is slightly more involved because we may need to expand the dev set into
-        # WORKING: (source, prefix, suffix)
-        # WORKING: in practice this also means that validation takes much longer, so we should probably start with a
-        # WORKING: smaller dev set, which is a sample of the full dev set
-
         # create the control function which will run evaluation
         # currently available evaluation metrics: 'bleu', 'meteor', 'imt_f1', 'imt_ndcg'
         evaluation_metrics = config_obj.get('evaluation_metrics', ['bleu'])
@@ -236,6 +230,11 @@ if __name__ == "__main__":
             translated_output_file = config_obj.get('translated_output_file', None)
             imt_f1_score, precision, recall = imt_f1_from_files(translated_output_file, references_file)
             logger.info('IMT F1 SCORE: {}, precision: {}, recall: {}'.format(imt_f1_score, precision, recall))
+
+        if 'wpa' in evaluation_metrics:
+            translated_output_file = config_obj.get('translated_output_file', None)
+            wpa_score = wpa_from_files(translated_output_file, references_file)
+            logger.info('WPA SCORE: {}'.format(wpa_score))
 
         if 'meteor' in evaluation_metrics:
             meteor_directory = config_obj.get('meteor_directory', None)

@@ -11,12 +11,58 @@ def sentence_level_imt_f1(src, ref, samples, **kwargs):
 
     return one_minus_scores
 
+def num_prd(hyp, ref):
+    """
+    compute the number of correctly predicted words in the suffix
+
+    :return: the length (in words) of the correct section of the suffix
+
+    """
+
+    # if both are empty you didn't predict anything correct
+    if len(hyp) == 0 or len(ref) == 0:
+        return 0.
+
+    match_len = 0.
+    for h_sym, r_sym in zip(hyp, ref):
+        if h_sym == r_sym:
+            match_len += 1.
+        else:
+            break
+
+    return match_len
+
+def num_prd_from_files(hyp_file, ref_file):
+    """
+    Compute average WPA over the provided files
+    :param hyp_file:
+    :param ref_file:
+    :return:
+
+    Note: input files are assumed to be whitespace-tokenized, if this isn't the case this metric will be wrong
+
+    """
+
+    with codecs.open(hyp_file, encoding='utf8') as hyp_f:
+        hyps = hyp_f.read().strip().split('\n')
+        hyps = [l.split() for l in hyps]
+
+        with codecs.open(ref_file, encoding='utf8') as ref_f:
+            refs = ref_f.read().strip().split('\n')
+            refs = [l.split() for l in refs]
+
+    scores = []
+    for hyp, ref in zip(hyps, refs):
+        scores.append(num_prd(hyp, ref))
+
+    return numpy.mean(scores)
+
 
 def wpa(hyp, ref):
     """
     compute first word prediction accuracy
 
-    :returns: 1. if first word is correct, 0. otherwise
+    :return: 1. if first word is correct, 0. otherwise
 
     """
 
@@ -32,7 +78,7 @@ def wpa(hyp, ref):
 
 def wpa_from_files(hyp_file, ref_file):
     """
-    Compute average IMT F1 over the provided files
+    Compute average WPA over the provided files
     :param hyp_file:
     :param ref_file:
     :return:

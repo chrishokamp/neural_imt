@@ -253,6 +253,10 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
         cPickle.load(open(trg_vocab)),
         bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
 
+    # TODO: should training stream actually have begin and end tokens?
+    # Note: this actually depends upon how the system was pre-trained, but systems used for initialization
+    # Note: should _always_ have BOS tokens
+
     # Get text files from both source and target
     src_dataset = TextFile([src_data], src_vocab,
                            bos_token='<S>',
@@ -400,17 +404,19 @@ def get_dev_stream_with_prefix_file(val_set=None, val_set_grndtruth=None, val_se
             cPickle.load(open(trg_vocab)),
             bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
 
-        # Note: user should have already provided EOS and BOS tokens in the data representation
+        # Note: user should have already provided the EOS token in the data representation for the suffix
+        # Note: The reason that we need EOS tokens in the reference file is that IMT systems need to evaluate metrics
+        # Note: which count prediction of the </S> token, and evaluation scripts are called on the files
         dev_source_dataset = TextFile([val_set], src_vocab,
-                                      bos_token=None,
-                                      eos_token=None,
+                                      bos_token='<S>',
+                                      eos_token='</S>',
                                       unk_token='<UNK>')
         dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab,
-                                      bos_token=None,
-                                      eos_token=None,
+                                      bos_token='<S>',
+                                      eos_token='</S>',
                                       unk_token='<UNK>')
         dev_prefix_dataset = TextFile([val_set_prefixes], trg_vocab,
-                                      bos_token=None,
+                                      bos_token='<S>',
                                       eos_token=None,
                                       unk_token='<UNK>')
         dev_suffix_dataset = TextFile([val_set_suffixes], trg_vocab,

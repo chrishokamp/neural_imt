@@ -7,10 +7,11 @@ from blocks.bricks.recurrent import recurrent
 from blocks.bricks import NDimensionalSoftmax
 from blocks.bricks.parallel import Parallel, Distribute
 
+from blocks.bricks.wrappers import WithExtraDims
 from blocks.utils import dict_union, dict_subset
 from blocks.bricks.sequence_generators import SequenceGenerator
 
-from blocks.bricks import (Tanh, Maxout, Linear, FeedforwardSequence,
+from blocks.bricks import (Tanh, Maxout, Linear, Logistic, FeedforwardSequence,
                            Bias, Initializable, MLP)
 from blocks.bricks.attention import SequenceContentAttention, AbstractAttentionRecurrent
 from blocks.bricks.base import application
@@ -30,22 +31,26 @@ from blocks.bricks.sequence_generators import BaseSequenceGenerator
 
 from picklable_itertools.extras import equizip
 
-#theano.config.optimizer = 'None'
-#theano.config.traceback.limit = 20
+# theano.config.optimizer = 'None'
+# theano.config.traceback.limit = 20
+
+class NDimensionalLogistic(Logistic):
+    decorators = [WithExtraDims()]
 
 # WORKING: optionally return the generation probability of samples from this method
 # change the expected_cost computation to take the scores as input
 # this should speed up min-risk significantly, because we won't need to recompute the generation costs
-
-# Note: this sequence generator lets us use baseline NMT models for IMT
+# however, we still need to build the graph for all sampled inputs, so passing the cost alone won't solve the problem
 class PartialSequenceGenerator(BaseSequenceGenerator):
     """
     Adds the ability to predict and sample partial target sequences by inputting both a source sequence
     and a target sequence
+
+    This sequence generator lets us use baseline NMT models for IMT
     """
 
     def __init__(self, readout, transition, attention,
-                 add_contexts=True, **kwargs):
+                 add_contexts=True, confidence_model=None, **kwargs):
         normal_inputs = [name for name in transition.apply.sequences
                          if 'mask' not in name]
         kwargs.setdefault('fork', Fork(normal_inputs))
@@ -55,6 +60,17 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         super(PartialSequenceGenerator, self).__init__(
             readout, transition, **kwargs)
+
+        # Working: add the option to include a next-word confidence model
+        if confidence_model:
+            self.softmax = NDimensionalSoftmax()
+            self.logistic = NDimensionalLogistic()
+            self.confidence_model = confidence_model
+
+            self.children.append(self.confidence_model)
+            self.children.append(self.softmax)
+            self.children.append(self.logistic)
+
 
     # Note: this function is only used by self.generate, because it has the recurrent decorator
     # Note: it's not used in the cost computation
@@ -129,12 +145,14 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         #     existing_contexts = super(PartialSequenceGenerator, self)._context_names
         #     return existing_contexts + ['target_prefix']
 
-    # WORKING: add the option to scale the costs by their postion in the sequence, earlier positions are more important
-    # WORKING: train on first-word accuracy only
     @application
     def cost_matrix(self, application_call, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns word-level cross-entropy generation costs for output sequences, conditioned
         upon both the source sequence, and a target prefix
+
+        This method includes the ability to scale word-level cost by position in the sequence
+
+        First word or first-N word training can be enabled by changing the mask that is used for the cost computation
 
         See Also
         --------
@@ -149,7 +167,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         prefix_inputs = self.fork.apply(prefix_feedback, as_dict=True)
 
         # Prepare input for the iterative part
-        # TODO: we're not passing any state names, how are they actually used?
         states = dict_subset(kwargs, self._state_names, must_have=False)
 
         # masks in context are optional (e.g. `attended_mask`)
@@ -187,7 +204,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         glimpses = {name: results[name][1:] for name in self._glimpse_names}
 
         # Compute the cost
-        # TODO: may need to change `readout.initial_outputs` to the last element of the prefix?
         # Note: setting the first element of feedback to the last feedback of the prefix
         feedback = tensor.roll(feedback, 1, 0)
         feedback = tensor.set_subtensor(feedback[0], prefix_feedback[-1])
@@ -223,6 +239,134 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return costs
 
+    @application
+    def prediction_confidence(self, application_call, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
+        """
+        returns the cost of predicting the next word, which is equivalent to the negative log probability that the next
+        word is correct (the next word corresponds to the first word of the suffix, aka the first word that the model
+        would generate
+        """
+
+        # We assume the data has axes (time, batch, features, ...)
+        batch_size = outputs.shape[1]
+
+        # run the model through the target prefix, then init the model with the correct states
+        prefix_feedback = self.readout.feedback(prefix_outputs)
+        prefix_inputs = self.fork.apply(prefix_feedback, as_dict=True)
+
+        # Prepare input for the iterative part
+        states = dict_subset(kwargs, self._state_names, must_have=False)
+
+        # masks in context are optional (e.g. `attended_mask`)
+        contexts = dict_subset(kwargs, self._context_names, must_have=False)
+
+        # first run the recurrent transition for the target_prefix, then use the final states from the
+        # the prefix to initialize the suffix generation
+        prefix_results = self.transition.apply(
+            mask=prefix_mask, return_initial_states=True, as_dict=True,
+            **dict_union(prefix_inputs, states, contexts))
+
+        # TODO: does this make sense for the initial glimpses? these are the glimpses we used
+        # TODO: to compute the last word of the prefix
+        prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
+
+        prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
+
+        # Now use the prefix initial states to init the recurrent transition, then compute the suffix representation
+        feedback = self.readout.feedback(outputs)
+        inputs = self.fork.apply(feedback, as_dict=True)
+
+        # Run the recurrent network
+        results = self.transition.apply(
+            mask=mask, return_initial_states=True, as_dict=True,
+            initial_states=prefix_initial_states,
+            initial_glimpses=prefix_initial_glimpses,
+            **dict_union(inputs, states, contexts))
+
+        # Separate the deliverables. The last states are discarded: they
+        # are not used to predict any output symbol. The initial glimpses
+        # are discarded because they are not used for prediction.
+        # Remember, glimpses are computed _before_ output stage, states are
+        # computed after.
+        states = {name: results[name][:-1] for name in self._state_names}
+        glimpses = {name: results[name][1:] for name in self._glimpse_names}
+
+        # Compute the cost
+        # Note: setting the first element of feedback to the last feedback of the prefix
+        feedback = tensor.roll(feedback, 1, 0)
+        feedback = tensor.set_subtensor(feedback[0], prefix_feedback[-1])
+        # feedback[0],
+        # self.readout.feedback(self.readout.initial_outputs(batch_size)))
+
+        # Note: Readout is just a projection of its inputs + bias
+        readouts = self.readout.readout(
+            feedback=feedback, **dict_union(states, glimpses, contexts))
+
+        # get the model emissions at every timestep
+        y_emissions = readouts.argmax(axis=-1)
+        y_equal = y_emissions - outputs
+
+        # if they're not zero, they're wrong
+        wrong_idxs_r = (y_equal > 0.).nonzero()
+        wrong_idxs_l = (y_equal < 0.).nonzero()
+
+        y_true = theano.tensor.ones(y_equal.shape, dtype='float32')
+        y_true = theano.tensor.set_subtensor(y_true[wrong_idxs_r], 0.)
+        y_true = theano.tensor.set_subtensor(y_true[wrong_idxs_l], 0.)
+
+        # WORKING: here we wish to get only the first element of each readout,
+        # WORKING: then we'll compare that to the reference to compute the true_y
+        # WORKING: we'll then consult our confidence_model to get a prediction about the next y, and compare with true_y
+        # WORKING: to get the cost
+        # WORKING: start with just linear transformation of the output logits
+
+        # WORKING: actually start by getting the confidence at every timestep
+        # readouts should be time,batch,vocab -- Note: another merge brick could be used in the same way as the Readout
+        # Note: brick to do a different kind of transformation on (states, glimpses, contexts)
+
+        # TODO: consider reshaping for clarity -- there is an error here somewhere
+        # TODO: make sure confidence model will work with 3d input
+        readout_shape = readouts.shape
+        flat_readouts = readouts.reshape((readout_shape[0]*readout_shape[1], readout_shape[2]))
+        confidence = self.confidence_model.apply(flat_readouts)
+        confidence_logits = theano.tensor.nnet.sigmoid(confidence)
+
+        # WORKING here
+        confidence_cost = confidence_logits
+        confidence_cost = confidence_cost.reshape((readout_shape[0], readout_shape[1], 1))
+
+        flat_y = y_true.reshape((readout_shape[0]*readout_shape[1], 1))
+
+        # confidence = self.logistic.apply(self.confidence_model.apply(readouts), extra_ndim=readouts.ndim -2)
+
+        # TODO: hang auxiliary variables and monitor them to see what their shapes are
+
+
+        # TODO: why the dimshuffle here? this could be a problem with the data transposes
+        # confidence = confidence.dimshuffle(2,0,1)
+        confidence_cost = theano.tensor.nnet.binary_crossentropy(confidence_cost, y_true)
+
+        # TODO: just the first timestep?
+        # confidence_cost = theano.tensor.set_subtensor(confidence_cost[1:], 0.)
+
+        # see here for more advice on avoiding nans
+        # T.clip(x, 1e-7, 1.0 - 1e-7)
+        # https: // groups.google.com / forum /  # !topic/theano-users/tn0ang57mfE
+
+
+        # TODO: separate confidence score computation and cost computation into different functions so that we can
+        # TODO: also return the score at inference time
+
+        # confidence should be (time, batch, 1)
+        # if mask is not None:
+        #     confidence_cost *= mask
+        #
+        # return confidence_cost
+
+        return confidence_cost
+
+
+
 # TODO: change the interface of this sequence generator to compute costs at sampling time, not cost time
 # TODO: this should make the min-risk sampling considerably faster
 class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
@@ -237,7 +381,6 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
     def probs(self, readouts):
         return self.softmax.apply(readouts, extra_ndim=readouts.ndim - 2)
 
-    # WORKING: modify this method to return the log probabilities as well
     @recurrent
     def generate(self, outputs, **kwargs):
         """A sequence generation step.
@@ -500,6 +643,15 @@ class NMTPrefixDecoder(Initializable):
             attended_dim=representation_dim,
             match_dim=state_dim, name="attention")
 
+
+        # WORKING: add the confidence model
+        confidence_model = InitializableFeedforwardSequence([
+                 Linear(input_dim=vocab_size, output_dim=1000,
+                        use_bias=True, name='confidence_model0').apply,
+                 Linear(input_dim=1000, output_dim=1, name='confidence_model1').apply])
+        # END WORKING: add the confidence model
+
+
         # Initialize the readout, note that SoftmaxEmitter emits -1 for
         # initial outputs which is used by LookupFeedBackWMT15
         readout = Readout(
@@ -521,10 +673,11 @@ class NMTPrefixDecoder(Initializable):
         # Build sequence generator accordingly
         # TODO: remove the semantic overloading of the `loss_function` kwarg
         # TODO: BIG TIME HACK HERE
-        # WORKING: implement min-risk IMT
+        # WORKING: add confidence model for IMT
         if loss_function == 'cross_entropy':
             # Note: it's the PartialSequenceGenerator which lets us condition upon the target prefix
             self.sequence_generator = PartialSequenceGenerator(
+                confidence_model=confidence_model,
                 readout=readout,
                 transition=self.transition,
                 attention=self.attention,
@@ -563,8 +716,6 @@ class NMTPrefixDecoder(Initializable):
         target_prefix_mask = target_prefix_mask.T
 
         # Get the cost matrix
-        # WORKING: make the cost function configurable for 1st word vs whole sequence
-        # WORKING: first-word only can be done via the mask
         cost = self.sequence_generator.cost_matrix(**{
             'mask': target_sentence_mask,
             'outputs': target_sentence,
@@ -576,6 +727,35 @@ class NMTPrefixDecoder(Initializable):
                                                    )
         return (cost * target_sentence_mask).sum() / \
                target_sentence_mask.shape[1]
+
+
+    # WORKING: implement word-level confidence cost
+    @application(inputs=['representation', 'source_sentence_mask',
+                         'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
+                 outputs=['cost'])
+    def confidence_cost(self, representation, source_sentence_mask,
+             target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
+
+        source_sentence_mask = source_sentence_mask.T
+        target_sentence = target_sentence.T
+        target_sentence_mask = target_sentence_mask.T
+        target_prefix = target_prefix.T
+        target_prefix_mask = target_prefix_mask.T
+
+        # TODO: add the confidence model to inititalization
+        # Get the cost matrix
+        cost = self.sequence_generator.prediction_confidence(**{
+            'mask': target_sentence_mask,
+            'outputs': target_sentence,
+            'prefix_mask': target_prefix_mask,
+            'prefix_outputs': target_prefix,
+            'attended': representation,
+            'attended_mask': source_sentence_mask,
+        }
+                                                   )
+        # return (cost * target_sentence_mask).sum() / \
+        #        target_sentence_mask.shape[1]
+        return cost.mean()
 
     # Note: this requires the decoder to be using sequence_generator which implements expected cost
     # WORKING: implement expected cost for target prefix decoding

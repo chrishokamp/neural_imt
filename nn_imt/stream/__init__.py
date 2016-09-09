@@ -326,7 +326,7 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
         'truncate_sources': kwargs.get('truncate_sources', [])
     }
     logger.info('Training suffix length is: {}'.format(configurable_padding_args['suffix_length']))
-    logger.info('I will pad the following sources after <suffix_length>: {}'.format(configurable_padding_args['truncate_sources']))
+    logger.info('I will mask the following sources after <suffix_length>: {}'.format(configurable_padding_args['truncate_sources']))
     masked_stream = PaddingWithEOS(
         stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
         mask_sources=('source', 'target', 'target_prefix', 'target_suffix'), **configurable_padding_args)

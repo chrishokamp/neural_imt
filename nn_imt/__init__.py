@@ -22,7 +22,7 @@ from blocks.model import Model
 from blocks.select import Selector
 from blocks_extras.extensions.plot import Plot
 
-from machine_translation.checkpoint import CheckpointNMT, LoadNMT
+from machine_translation.checkpoint import CheckpointNMT, LoadNMT, RunExternalValidation
 from machine_translation.model import BidirectionalEncoder
 
 from machine_translation.stream import _ensure_special_tokens
@@ -74,15 +74,18 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
 
+    # WORKING: END implement confidence cost model
     # TODO: change the name of `target_sentence` to `target_suffix` for more clarity
     # cost = decoder.cost(
     #     encoder.apply(source_sentence, source_sentence_mask),
     #     source_sentence_mask, target_sentence, target_sentence_mask,
     #     target_prefix, target_prefix_mask)
-    cost = decoder.cost(
+
+    cost = decoder.confidence_cost(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask, target_sentence, target_sentence_mask,
         target_prefix, target_prefix_mask)
+    # WORKING: implement confidence cost model
 
     logger.info('Creating computational graph')
     cg = ComputationGraph(cost)
@@ -108,22 +111,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                           if x.name == 'maxout_apply_output']
         cg = apply_dropout(cg, dropout_inputs, config['dropout'])
 
-    # Apply weight noise for regularization
-    if config.get('weight_noise_ff', None) > 0.0:
-        logger.info('Applying weight noise to ff layers')
-        enc_params = Selector(encoder.lookup).get_parameters().values()
-        enc_params += Selector(encoder.fwd_fork).get_parameters().values()
-        enc_params += Selector(encoder.back_fork).get_parameters().values()
-        dec_params = Selector(
-            decoder.sequence_generator.readout).get_parameters().values()
-        dec_params += Selector(
-            decoder.sequence_generator.fork).get_parameters().values()
-        dec_params += Selector(decoder.transition.initial_transformer).get_parameters().values()
-        cg = apply_noise(cg, enc_params+dec_params, config['weight_noise_ff'])
-
-    # TODO: weight noise for recurrent params isn't currently implemented -- see config['weight_noise_rec']
     # TODO: fixed dropout mask for recurrent params?
-
     # Print shapes
     shapes = [param.get_value().shape for param in cg.parameters]
     logger.info("Parameter shapes: ")
@@ -245,8 +233,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     main_loop.run()
 
 
-# TODO: use this function in training as well (at least for sampling and validation components)
-# TODO: to get the pieces we need to setup the graphs
 # TODO: break this function into parts
 def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None):
 

@@ -55,7 +55,6 @@ if __name__ == "__main__":
         # TODO: support both modes of creating validation data -- look at the config file to see which one to use
         dev_stream = get_dev_stream_with_prefix_file(**config_obj)
         #dev_stream = get_dev_stream_with_prefixes(**config_obj)
-        import ipdb;ipdb.set_trace()
 
         # HACK THE VALIDATION
         #trg_ivocab = {v: k for k, v in trg_vocab.items()}
@@ -265,6 +264,11 @@ if __name__ == "__main__":
 
     # WORKING: train a model of next-word confidence: how sure am I that the next word is correct, given what came before?
     elif mode == 'confidence':
+        # build the IMT model with a different predictor
+        # if we're only predicting confidence about the next word, this model is simpler than MT
+        # because we don't need to feed recurrent inputs back in
+
+
         # confidence 'score' is classification accuracy (RIGHT/WRONG) on the dev set
         # load the trained model
         # to create training minibatches:
@@ -274,9 +278,14 @@ if __name__ == "__main__":
         #     - use the readout brick's output, but with 2d output dimension -- i.e. make the output softmax a 2-d RIGHT/WRONG prediction
         #     - thus the model learns which things it's good at predicting, and which it's not
         #     - Question: can we use the same training data as we used to train the translation model, or should we use something different?
-        # - note that if we are just training the confidence model, it would be faster to pre-translate
 
-        # To evaluate dynamic confidence, we want to know how it performs against IMT F1, or IMT NDCG
+        # THINKING: how to convert reference word IDs into binary yes/no?
+        # THINKING: compare suffix word [0] to argmax of timestep [0], if == , 1 else 0
+        # input softmax layer (or unscaled logits) into LR model, predict 1 or 0
+        # -- compare this to reference obtained in the line above
+
+        # To evaluate dynamic confidence, we want to know how confidence truncation affects IMT F1, or IMT NDCG
+        # - note that if we are just training the confidence model, it would be faster to pre-translate
 
 
         pass

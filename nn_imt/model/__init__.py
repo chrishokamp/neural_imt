@@ -302,17 +302,20 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))
 
+
+        # WORKING: there is a problem with the gradient computation from this function
+        # WORKING: split cost computation out of prediction
         # get the model emissions at every timestep
-        y_emissions = readouts.argmax(axis=-1)
-        y_equal = y_emissions - outputs
+        #y_emissions = readouts.argmax(axis=-1)
+        #y_equal = y_emissions - outputs
 
         # if they're not zero, they're wrong
-        wrong_idxs_r = (y_equal > 0.).nonzero()
-        wrong_idxs_l = (y_equal < 0.).nonzero()
+        #wrong_idxs_r = (y_equal > 0.).nonzero()
+        #wrong_idxs_l = (y_equal < 0.).nonzero()
 
-        y_true = theano.tensor.ones(y_equal.shape, dtype='float32')
-        y_true = theano.tensor.set_subtensor(y_true[wrong_idxs_r], 0.)
-        y_true = theano.tensor.set_subtensor(y_true[wrong_idxs_l], 0.)
+        #y_true = theano.tensor.ones(y_equal.shape, dtype='float32')
+        #y_true = theano.tensor.set_subtensor(y_true[wrong_idxs_r], 0.)
+        #y_true = theano.tensor.set_subtensor(y_true[wrong_idxs_l], 0.)
 
         # WORKING: here we wish to get only the first element of each readout,
         # WORKING: then we'll compare that to the reference to compute the true_y
@@ -326,25 +329,33 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         # TODO: consider reshaping for clarity -- there is an error here somewhere
         # TODO: make sure confidence model will work with 3d input
-        readout_shape = readouts.shape
-        flat_readouts = readouts.reshape((readout_shape[0]*readout_shape[1], readout_shape[2]))
-        confidence = self.confidence_model.apply(flat_readouts)
-        confidence_logits = theano.tensor.nnet.sigmoid(confidence)
+        #readout_shape = readouts.shape
+        #flat_readouts = readouts.reshape((readout_shape[0]*readout_shape[1], readout_shape[2]))
+        #confidence = self.confidence_model.apply(flat_readouts)
+        #confidence_logits = theano.tensor.nnet.sigmoid(confidence)
 
         # WORKING here
-        confidence_cost = confidence_logits
-        confidence_cost = confidence_cost.reshape((readout_shape[0], readout_shape[1], 1))
+        #confidence_cost = confidence_logits
+        #confidence_cost = confidence_cost.reshape((readout_shape[0], readout_shape[1], 1))
 
-        flat_y = y_true.reshape((readout_shape[0]*readout_shape[1], 1))
+        # TODO: dump everything in this function and look at it -- remember attaching auxilliary variables to the application call
 
+        #flat_y = y_true.reshape((readout_shape[0]*readout_shape[1], 1))
+
+        #confidence = self.logistic.apply(self.confidence_model.apply(readouts), extra_ndim=readouts.ndim -2)
         # confidence = self.logistic.apply(self.confidence_model.apply(readouts), extra_ndim=readouts.ndim -2)
+        #confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(readouts))
+        # the last dimension size = 1, so we can do this
+        #confidence = confidence.reshape(confidence.shape[:2])
+
 
         # TODO: hang auxiliary variables and monitor them to see what their shapes are
 
 
         # TODO: why the dimshuffle here? this could be a problem with the data transposes
         # confidence = confidence.dimshuffle(2,0,1)
-        confidence_cost = theano.tensor.nnet.binary_crossentropy(confidence_cost, y_true)
+
+        #confidence_cost = theano.tensor.nnet.binary_crossentropy(confidence, y_true)
 
         # TODO: just the first timestep?
         # confidence_cost = theano.tensor.set_subtensor(confidence_cost[1:], 0.)
@@ -357,13 +368,23 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # TODO: separate confidence score computation and cost computation into different functions so that we can
         # TODO: also return the score at inference time
 
-        # confidence should be (time, batch, 1)
-        # if mask is not None:
-        #     confidence_cost *= mask
+        # confidence should be (time, batch)
+        #if mask is not None:
+        #    confidence_cost *= mask
         #
         # return confidence_cost
 
-        return confidence_cost
+        #application_call.add_auxiliary_variable(confidence, name='confidence')
+        #application_call.add_auxiliary_variable(y_true, name='y_true')
+        #application_call.add_auxiliary_variable(confidence_cost, name='confidence_cost')
+        # application_call.add_auxiliary_variable(confidence)
+
+        #return readouts,y_equal
+        #return y_equal
+        #return y_emissions
+        #return confidence_cost
+        return readouts
+
 
 
 
@@ -646,9 +667,10 @@ class NMTPrefixDecoder(Initializable):
 
         # WORKING: add the confidence model
         confidence_model = InitializableFeedforwardSequence([
-                 Linear(input_dim=vocab_size, output_dim=1000,
-                        use_bias=True, name='confidence_model0').apply,
-                 Linear(input_dim=1000, output_dim=1, name='confidence_model1').apply])
+                 #Linear(input_dim=vocab_size, output_dim=1000,
+                 #       use_bias=True, name='confidence_model0').apply,
+                 Tanh().apply,
+                 Linear(input_dim=vocab_size, output_dim=1, use_bias=True, name='confidence_model1').apply])
         # END WORKING: add the confidence model
 
 
@@ -755,7 +777,9 @@ class NMTPrefixDecoder(Initializable):
                                                    )
         # return (cost * target_sentence_mask).sum() / \
         #        target_sentence_mask.shape[1]
-        return cost.mean()
+        # return (cost * target_sentence_mask).mean()
+        #return cost.sum()
+        return cost
 
     # Note: this requires the decoder to be using sequence_generator which implements expected cost
     # WORKING: implement expected cost for target prefix decoding

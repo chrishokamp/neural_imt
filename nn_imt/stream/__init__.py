@@ -83,6 +83,7 @@ class PrefixSuffixStreamTransformer:
         self.random_state = numpy.random.RandomState(self.random_seed)
 
         # whether we should always generate the same samples
+        # TODO: there is an error in the logic here, see below
         self.static_samples = kwargs.get('static_samples', False)
 
 
@@ -293,16 +294,18 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     # flatten the stream back out into (source, target, target_prefix, target_suffix)
     stream = Unpack(stream)
 
+    # WORKING: debugging nan
     # Now make a very big batch that we can shuffle
-    shuffle_batch_size = kwargs['shuffle_batch_size']
-    stream = Batch(stream,
-                   iteration_scheme=ConstantScheme(shuffle_batch_size)
-                   )
+    #shuffle_batch_size = kwargs['shuffle_batch_size']
+    #stream = Batch(stream,
+    #               iteration_scheme=ConstantScheme(shuffle_batch_size)
+    #               )
 
-    stream = ShuffleBatchTransformer(stream)
+    #stream = ShuffleBatchTransformer(stream)
 
     # unpack it again
-    stream = Unpack(stream)
+    #stream = Unpack(stream)
+    # WORKING: END debugging nan
 
     # Build a batched version of stream to read k batches ahead
     stream = Batch(stream,
@@ -310,7 +313,7 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
                    )
 
     # Sort all samples in the read-ahead batch
-    stream = Mapping(stream, SortMapping(_length))
+    # stream = Mapping(stream, SortMapping(_length))
 
     # Convert it into a stream again
     stream = Unpack(stream)

@@ -16,6 +16,7 @@ from nn_imt import main, IMTPredictor, split_refs_into_prefix_suffix_files
 from nn_imt.stream import get_tr_stream_with_prefixes, get_dev_stream_with_prefixes, get_dev_stream_with_prefix_file
 from nn_imt.sample import SamplingBase
 from nn_imt.evaluation import imt_f1_from_files, imt_ndcg_from_files, wpa_from_files, num_prd_from_files
+from nn_imt import confidence
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -264,6 +265,8 @@ if __name__ == "__main__":
 
     # WORKING: train a model of next-word confidence: how sure am I that the next word is correct, given what came before?
     elif mode == 'confidence':
+
+        import ipdb; ipdb.set_trace()
         # build the IMT model with a different predictor
         # if we're only predicting confidence about the next word, this model is simpler than MT
         # because we don't need to feed recurrent inputs back in
@@ -287,7 +290,13 @@ if __name__ == "__main__":
         # To evaluate dynamic confidence, we want to know how confidence truncation affects IMT F1, or IMT NDCG
         # - note that if we are just training the confidence model, it would be faster to pre-translate
 
+        # Get data streams and call main
+        training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
 
+        # TODO: support both modes of creating validation data -- look at the config file to see which one to use
+        dev_stream = get_dev_stream_with_prefix_file(**config_obj)
+
+        confidence.main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
         pass
 
 

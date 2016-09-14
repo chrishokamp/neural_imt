@@ -52,7 +52,6 @@ def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
     return zip(sources, prefixes, suffixes)
 
 
-# Module for functionality associated with streaming data
 class PrefixSuffixStreamTransformer:
     """
     Takes a stream of (source, target) and adds the sources ('suffixes', 'prefixes'),
@@ -116,6 +115,35 @@ class PrefixSuffixStreamTransformer:
             self.random_state = numpy.random.RandomState(self.random_seed)
 
         return (target_prefixes, target_suffixes)
+
+
+class CallFunctionOnStream:
+    """
+    Init with a function, and let the user specify the indices (and order of indices) which will be used to call the
+    function
+
+    Parameters
+    ----------
+    function: function: the function that will be called
+    arg_indices: list: an ordering specifying the indices of the datastream that should be used to call this function
+
+    Notes
+    -----
+
+    """
+
+    def __init__(self, function, arg_indices):
+        self.function = function
+        self.arg_indices = arg_indices
+
+    def __call__(self, data, **kwargs):
+
+        # Note: we're returning a tuple with a single item, so that this function can be used with
+        # Note: the kwarg `add_sources` of a Fuel Mapping
+        # Note: since the convention is for a theano function to return a list, we take the first thing
+        # Note: in the returned list
+        # return (self.function(*[data[idx] for idx in self.arg_indices])[0],)
+        return (self.function(*[data[idx] for idx in self.arg_indices])[0],)
 
 
 # Module for functionality associated with streaming data

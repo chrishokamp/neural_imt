@@ -142,8 +142,18 @@ class CallFunctionOnStream:
         # Note: the kwarg `add_sources` of a Fuel Mapping
         # Note: since the convention is for a theano function to return a list, we take the first thing
         # Note: in the returned list
-        # return (self.function(*[data[idx] for idx in self.arg_indices])[0],)
-        return (self.function(*[data[idx] for idx in self.arg_indices])[0],)
+        output = self.function(*[data[idx] for idx in self.arg_indices])
+        tags = output[0].argmax(axis=-1)
+        tags = (tags.T == data[6]).astype('float32')
+
+        import ipdb; ipdb.set_trace()
+        
+        # HACK: this is specific to the confidence model usecase
+        print([data[i].shape for i in range(len(data))])
+        print([data[i].shape for i in range(len(data))])
+        print(output[0].shape)
+        #return (output[0])
+        return (output[0],tags)
 
 
 # Module for functionality associated with streaming data

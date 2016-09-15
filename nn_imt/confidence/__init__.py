@@ -36,7 +36,7 @@ from fuel.transformers import (
 from fuel.schemes import ConstantScheme
 
 from blocks.algorithms import (GradientDescent, StepClipping,
-                               CompositeRule, Adam, AdaDelta, Scale)
+                               CompositeRule, Adam, AdaDelta, Scale, RemoveNotFinite)
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.filter import VariableFilter
@@ -46,7 +46,6 @@ from blocks.main_loop import MainLoop
 from blocks.model import Model
 from blocks.select import Selector
 from blocks_extras.extensions.plot import Plot
-
 
 from machine_translation.checkpoint import CheckpointNMT, LoadNMT, RunExternalValidation
 from machine_translation.model import BidirectionalEncoder
@@ -60,6 +59,7 @@ from nn_imt.sample import SampleFunc
 from nn_imt.stream import (PrefixSuffixStreamTransformer, CopySourceAndTargetToMatchPrefixes,
                            IMTSampleStreamTransformer, CopySourceAndPrefixNTimes, _length,
                            filter_by_sample_score, CallFunctionOnStream)
+from nn_imt import load_params_and_get_beam_search
 
 from machine_translation.stream import (get_textfile_stream, _too_long, _oov_to_unk,
                                         ShuffleBatchTransformer, PaddingWithEOS, FlattenSamples)
@@ -130,8 +130,11 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # [target_suffix, source_mask, source, target_prefix_mask, target_prefix, target_suffix_mask]
     prediction_function = get_prediction_function(exp_config=config)
 
-    tr_stream = Mapping(tr_stream, CallFunctionOnStream(prediction_function, [4, 1, 0, 3, 2, 5]),
-                        add_sources=('prediction_tags',))
+    tr_stream = Mapping(tr_stream, CallFunctionOnStream(prediction_function, [1, 0, 5, 4, 7, 6]),
+    #tr_stream = Mapping(tr_stream, CallFunctionOnStream(prediction_function, [6, 1, 0, 5, 4, 7]),
+                        add_sources=('readouts', 'prediction_tags'))
+
+    import ipdb; ipdb.set_trace()
 
     # Create the prediction confidence model
     # the first draft of this model uses the readout output (before the post-merge step) as the per-timestep state vector
@@ -157,37 +160,42 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # By zipping the confidence model output with the reference, we get the model's confidence that this reference word
     # will be predicted correctly
     prediction_tags = tensor.matrix('prediction_tags')
+    readouts = tensor.tensor3('readouts')
 
     # Construct model
     logger.info('Building RNN encoder-decoder')
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
 
-    # Note: the use_post_merge is important for confidence models
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
-        config['enc_nhids'] * 2, loss_function='cross_entropy', use_post_merge=False)
+        config['enc_nhids'] * 2, loss_function='cross_entropy')
 
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
+
+    cost = decoder.confidence_cost(
+        encoder.apply(source_sentence, source_sentence_mask),
+        source_sentence_mask, target_sentence, target_sentence_mask,
+        target_prefix, target_prefix_mask, readouts, prediction_tags)
 
     logger.info('Creating computational graph')
     # working: implement cost for confidence model
     cg = ComputationGraph(cost)
 
     # INITIALIZATION
-    # logger.info('Initializing model')
-    # encoder.weights_init = decoder.weights_init = IsotropicGaussian(
-    #     config['weight_scale'])
-    # encoder.biases_init = decoder.biases_init = Constant(0)
-    # encoder.push_initialization_config()
-    # decoder.push_initialization_config()
-    # encoder.bidir.prototype.weights_init = Orthogonal()
-    # decoder.transition.weights_init = Orthogonal()
-    # encoder.initialize()
-    # decoder.initialize()
+    logger.info('Initializing model')
+    encoder.weights_init = decoder.weights_init = IsotropicGaussian(
+        config['weight_scale'])
+    encoder.biases_init = decoder.biases_init = Constant(0)
+    encoder.push_initialization_config()
+    decoder.push_initialization_config()
+    encoder.bidir.prototype.weights_init = Orthogonal()
+    decoder.transition.weights_init = Orthogonal()
+    encoder.initialize()
+    decoder.initialize()
 
-
+    import ipdb;ipdb.set_trace()
 
     # apply dropout for regularization
     if config['dropout'] < 1.0:
@@ -201,17 +209,13 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # WORKING: implement confidence -- remove all params except output model
     cost_model = Model(cost)
 
-    #        if exp_config.get('REMOVE_EMBEDDINGS', True):
     model_params = cost_model.get_parameter_dict()
     trainable_params = cg.parameters
-    params_to_remove = [model_params[k] for k in model_params.keys() if 'confidence' not in k]
-    for p in params_to_remove:
-        trainable_params.remove(p)
-
-    #[k for k in model_params.keys() if 'confidence' in k]
-
-
-    import ipdb; ipdb.set_trace()
+    import ipdb;ipdb.set_trace()
+    print('trainable params')
+    #params_to_remove = [model_params[k] for k in model_params.keys() if 'confidence' not in k]
+    #for p in params_to_remove:
+    #    trainable_params.remove(p)
 
     # target_embeddings = model.get_parameter_dict()['/target_recurrent_lm_with_alignments/target_embeddings.W']
     # trainable_params.remove(source_embeddings)
@@ -229,13 +233,13 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # logger.info("Total number of parameters: {}".format(len(shapes)))
 
     # Print parameter names
-    enc_dec_param_dict = merge(Selector(encoder).get_parameters(),
-                               Selector(decoder).get_parameters())
-    logger.info("Parameter names: ")
-    for name, value in enc_dec_param_dict.items():
-        logger.info('    {:15}: {}'.format(value.get_value().shape, name))
-    logger.info("Total number of parameters: {}"
-                .format(len(enc_dec_param_dict)))
+    # enc_dec_param_dict = merge(Selector(encoder).get_parameters(),
+    #                            Selector(decoder).get_parameters())
+    # logger.info("Parameter names: ")
+    # for name, value in enc_dec_param_dict.items():
+    #     logger.info('    {:15}: {}'.format(value.get_value().shape, name))
+    # logger.info("Total number of parameters: {}"
+    #             .format(len(enc_dec_param_dict)))
 
     # Set up training model
     logger.info("Building model")
@@ -250,11 +254,11 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     logger.info("Initializing extensions")
     extensions = [
         FinishAfter(after_n_batches=config['finish_after']),
-        # TrainingDataMonitoring([cost], after_batch=True),
+        TrainingDataMonitoring([cost], after_batch=True),
         # TrainingDataMonitoring(trainable_params, after_batch=True),
-        # Printing(after_batch=True),
-        # CheckpointNMT(config['saveto'],
-        #               every_n_batches=config['save_freq'])
+        Printing(after_batch=True),
+        CheckpointNMT(config['saveto'],
+                      every_n_batches=config['save_freq'])
     ]
 
     # WORKING: confidence prediction
@@ -263,6 +267,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Set up the sampling graph for validation during training
     # Theano variables for the sampling graph
+    # Note this also loads the model parameters
     sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
@@ -316,22 +321,31 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # WORKING: implement confidence model
     # if there is dropout or random noise, we need to use the output of the modified graph
-    #if config['dropout'] < 1.0 or config['weight_noise_ff'] > 0.0:
-    #    algorithm = GradientDescent(
-    #        cost=cg.outputs[0], parameters=trainable_params,
-    # step_rule=CompositeRule([StepClipping(config['step_clipping']),
-    #                          eval(config['step_rule'])()]),
-    #        step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]),
-    #        on_unused_sources='warn'
-    #    )
+    algorithm = GradientDescent(
+        cost=cg.outputs[0], parameters=trainable_params,
+        step_rule=CompositeRule([StepClipping(config['step_clipping']),
+                          eval(config['step_rule'])(), RemoveNotFinite()]),
+        # step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]),
+        on_unused_sources='warn'
+    )
+    #if config['dropout'] < 1.0:
+    #   algorithm = GradientDescent(
+    #       cost=cg.outputs[0], parameters=trainable_params,
+    #       step_rule=CompositeRule([StepClipping(config['step_clipping']),
+    #                         eval(config['step_rule'])(), RemoveNotFinite()]),
+    #       # step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]),
+    #       on_unused_sources='warn'
+    #   )
     #else:
-    #    algorithm = GradientDescent(
-    #        cost=cost, parameters=cg.parameters,
-    #        step_rule=CompositeRule([StepClipping(config['step_clipping']),
-    #                                 eval(config['step_rule'])()]),
-    #        on_unused_sources='warn'
-    #    )
+    #   algorithm = GradientDescent(
+    #       cost=cost, parameters=cg.parameters,
+    #       step_rule=CompositeRule([StepClipping(config['step_clipping']),
+    #                                eval(config['step_rule'])()]),
+    #       on_unused_sources='warn'
+    #   )
     # END WORKING: implement confidence model
+
+    import ipdb;ipdb.set_trace()
 
 
     # enrich the logged information
@@ -366,14 +380,14 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     #target_prefix_mask = tensor.matrix('target_prefix_mask')
 
 
-    confidence_output = decoder.confidence_cost(
-        encoder.apply(source_sentence, source_sentence_mask),
-        source_sentence_mask, target_sentence, target_sentence_mask,
-        target_prefix, target_prefix_mask)
+    # confidence_output = decoder.confidence_cost(
+    #     encoder.apply(source_sentence, source_sentence_mask),
+    #     source_sentence_mask, target_sentence, target_sentence_mask,
+    #     target_prefix, target_prefix_mask)
 
-    confidence_model = Model(confidence_output)
+    # confidence_model = Model(confidence_output)
 
-    t_cost_func = confidence_model.get_theano_function()
+    # t_cost_func = confidence_model.get_theano_function()
     # inputs
     # [source_mask, source, target_prefix_mask, target_prefix, target_suffix_mask, target_suffix]
 
@@ -381,66 +395,63 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # get the right args from the datastream
     # TODO: just print source, prefix, suffix, prediction, correct to new files -- this makes sure everything is aligned
-    OUTPUT_DIR = '/media/1tb_drive/imt_models/word_prediction_accuracy_experiments/en-de/exp_1'
-    for the_file in os.listdir(OUTPUT_DIR):
-        file_path = os.path.join(OUTPUT_DIR, the_file)
-        try:
-            if os.path.isfile(file_path):
-                os.unlink(file_path)
-        except Exception as e:
-            print(e)
-
-    def write_file_truncate_mask(filename, data, mask, mode='a'):
-        ''' data is list of list '''
-
-        assert len(data) == len(mask)
-        with codecs.open(filename, mode, encoding='utf8') as out:
-            for l, m in zip(data, mask):
-                output = u' '.join(l[:int(m.sum())]) + u'\n'
-                out.write(output)
-        logger.info('Wrote file: {}'.format(filename))
-
-
-    target_ivocab = {k:v.decode('utf8') for v,k in target_vocab.items()}
-    source_ivocab = {k:v.decode('utf8') for v,k in source_vocab.items()}
-    import ipdb; ipdb.set_trace()
-    tag_ivocab = {1: 'True', 0: 'False'}
-
-    test_iter = tr_stream.get_epoch_iterator()
-    it = 0
-    for t_source, t_source_mask, t_target, t_target_mask, t_target_prefix, t_target_prefix_mask, t_target_suffix, t_target_suffix_mask in test_iter:
-        if it <= 1000:
-            it += 1
-            t_cost = t_cost_func(t_source_mask, t_source, t_target_prefix_mask, t_target_prefix, t_target_suffix_mask, t_target_suffix)
-            readouts = t_cost[0]
-            preds = readouts.argmax(axis=2)
-            correct = preds.T == t_target_suffix
-
-
-            source_output = os.path.join(OUTPUT_DIR,'sources.en')
-            prefix_output = os.path.join(OUTPUT_DIR,'prefixes.de')
-            suffix_output = os.path.join(OUTPUT_DIR,'suffixes.de')
-            prediction_output = os.path.join(OUTPUT_DIR,'predictions.de')
-            correct_output = os.path.join(OUTPUT_DIR,'prefix_word_prediction_acc.out')
-
-            source_text = [[source_ivocab[w] for w in s] for s in t_source]
-            prefix_text = [[target_ivocab[w] for w in s] for s in t_target_prefix]
-            suffix_text = [[target_ivocab[w] for w in s] for s in t_target_suffix]
-            pred_text = [[target_ivocab[w] for w in s] for s in preds.T]
-            correct_text = [[tag_ivocab[w] for w in s] for s in correct]
-
-
-            for triple in zip([source_output, prefix_output, suffix_output, prediction_output, correct_output],
-                              [source_text, prefix_text, suffix_text, pred_text, correct_text],
-                              [t_source_mask, t_target_prefix_mask, t_target_suffix_mask, t_target_suffix_mask, t_target_suffix_mask]):
-                write_file_truncate_mask(*triple)
-        else:
-            break
-
-    import ipdb; ipdb.set_trace()
-
-
-
+    # OUTPUT_DIR = '/media/1tb_drive/imt_models/word_prediction_accuracy_experiments/en-de/exp_1'
+    # for the_file in os.listdir(OUTPUT_DIR):
+    #     file_path = os.path.join(OUTPUT_DIR, the_file)
+    #     try:
+    #         if os.path.isfile(file_path):
+    #             os.unlink(file_path)
+    #     except Exception as e:
+    #         print(e)
+    #
+    # def write_file_truncate_mask(filename, data, mask, mode='a'):
+    #     ''' data is list of list '''
+    #
+    #     assert len(data) == len(mask)
+    #     with codecs.open(filename, mode, encoding='utf8') as out:
+    #         for l, m in zip(data, mask):
+    #             output = u' '.join(l[:int(m.sum())]) + u'\n'
+    #             out.write(output)
+    #     logger.info('Wrote file: {}'.format(filename))
+    #
+    #
+    # target_ivocab = {k:v.decode('utf8') for v,k in target_vocab.items()}
+    # source_ivocab = {k:v.decode('utf8') for v,k in source_vocab.items()}
+    # import ipdb; ipdb.set_trace()
+    # tag_ivocab = {1: 'True', 0: 'False'}
+    #
+    # test_iter = tr_stream.get_epoch_iterator()
+    # it = 0
+    # for t_source, t_source_mask, t_target, t_target_mask, t_target_prefix, t_target_prefix_mask, t_target_suffix, t_target_suffix_mask in test_iter:
+    #     if it <= 1000:
+    #         it += 1
+    #         t_cost = t_cost_func(t_source_mask, t_source, t_target_prefix_mask, t_target_prefix, t_target_suffix_mask, t_target_suffix)
+    #         readouts = t_cost[0]
+    #         preds = readouts.argmax(axis=2)
+    #         correct = preds.T == t_target_suffix
+    #
+    #
+    #         source_output = os.path.join(OUTPUT_DIR,'sources.en')
+    #         prefix_output = os.path.join(OUTPUT_DIR,'prefixes.de')
+    #         suffix_output = os.path.join(OUTPUT_DIR,'suffixes.de')
+    #         prediction_output = os.path.join(OUTPUT_DIR,'predictions.de')
+    #         correct_output = os.path.join(OUTPUT_DIR,'prefix_word_prediction_acc.out')
+    #
+    #         source_text = [[source_ivocab[w] for w in s] for s in t_source]
+    #         prefix_text = [[target_ivocab[w] for w in s] for s in t_target_prefix]
+    #         suffix_text = [[target_ivocab[w] for w in s] for s in t_target_suffix]
+    #         pred_text = [[target_ivocab[w] for w in s] for s in preds.T]
+    #         correct_text = [[tag_ivocab[w] for w in s] for s in correct]
+    #
+    #
+    #         for triple in zip([source_output, prefix_output, suffix_output, prediction_output, correct_output],
+    #                           [source_text, prefix_text, suffix_text, pred_text, correct_text],
+    #                           [t_source_mask, t_target_prefix_mask, t_target_suffix_mask, t_target_suffix_mask, t_target_suffix_mask]):
+    #             write_file_truncate_mask(*triple)
+    #     else:
+    #         break
+    #
+    # import ipdb; ipdb.set_trace()
 
     #t_cost = t_cost_func(t_source, t_target_prefix)
     #t_cost = t_cost_func(t_target_suffix, t_source_mask, t_source, t_target_prefix_mask, t_target_prefix, t_target_suffix_mask)
@@ -457,11 +468,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # TODO: function which adds right/wrong tags for model predictions to the datastream. In this case we can learn a simple linear model as a baseline
     # TODO: print predictions for each batch for each timestep to file -- _dont shuffle_ so that we get the right order
 
-
-
-
-    import ipdb;ipdb.set_trace()
-
+    # import ipdb;ipdb.set_trace()
 
 
     # from blocks reverse_words example
@@ -478,15 +485,15 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         v.name = k.name + '_{}'.format(i)
 
     aux_vars = [v for v in cg.auxiliary_variables[-3:]]
-    import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
 
 
 
     extensions.extend([
         TrainingDataMonitoring([cost], after_batch=True),
-        TrainingDataMonitoring([v for k,v in algorithm.updates[:2]], after_batch=True),
-        TrainingDataMonitoring(aux_vars, after_batch=True),
-        TrainingDataMonitoring(trainable_params, after_batch=True),
+        # TrainingDataMonitoring([v for k,v in algorithm.updates[:2]], after_batch=True),
+        # TrainingDataMonitoring(aux_vars, after_batch=True),
+        # TrainingDataMonitoring(trainable_params, after_batch=True),
         Printing(after_batch=True)]
     )
 

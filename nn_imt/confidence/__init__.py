@@ -122,6 +122,62 @@ def get_prediction_function(exp_config):
     return prediction_function
 
 
+def get_confidence_prediction_function(exp_config):
+    # Create Theano variables
+    logger.info('Creating theano variables')
+    source_sentence = tensor.lmatrix('source')
+    source_sentence_mask = tensor.matrix('source_mask')
+
+    # Note that the _names_ are changed from normal NMT
+    # for IMT training, we use only the suffix as the reference
+    target_sentence = tensor.lmatrix('target_suffix')
+    target_sentence_mask = tensor.matrix('target_suffix_mask')
+
+    target_prefix = tensor.lmatrix('target_prefix')
+    target_prefix_mask = tensor.matrix('target_prefix_mask')
+
+    # WORKING HERE:
+    # symbolic variable which tags each timestep as GOOD/BAD
+    # Note: later this might be tags for a hypothesis, right now the timesteps are actually determined by the reference
+    # By zipping the confidence model output with the reference, we get the model's confidence that this reference word
+    # will be predicted correctly
+    prediction_tags = tensor.matrix('prediction_tags')
+    readouts = tensor.tensor3('readouts')
+
+    # Construct model
+    logger.info('Building RNN encoder-decoder')
+    encoder = BidirectionalEncoder(
+        exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
+
+    decoder = NMTPrefixDecoder(
+        exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
+        exp_config['enc_nhids'] * 2, loss_function='cross_entropy')
+
+    # rename to match baseline NMT systems
+    decoder.name = 'decoder'
+
+    confidences = decoder.confidence_model.apply(
+        encoder.apply(source_sentence, source_sentence_mask),
+        source_sentence_mask, target_sentence, target_sentence_mask,
+        target_prefix, target_prefix_mask, readouts, prediction_tags)
+
+    logger.info('Creating computational graph')
+    # working: implement cost for confidence model
+    cg = ComputationGraph(cost)
+
+    # INITIALIZATION
+    logger.info('Initializing model')
+    encoder.weights_init = decoder.weights_init = IsotropicGaussian(
+        config['weight_scale'])
+    encoder.biases_init = decoder.biases_init = Constant(0)
+    encoder.push_initialization_config()
+    decoder.push_initialization_config()
+    encoder.bidir.prototype.weights_init = Orthogonal()
+    decoder.transition.weights_init = Orthogonal()
+    encoder.initialize()
+    decoder.initialize()
+
+
 # Copied from IMT main loop -- hacked version to do confidence prediction output
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
@@ -256,7 +312,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         FinishAfter(after_n_batches=config['finish_after']),
         TrainingDataMonitoring([cost], after_batch=True),
         # TrainingDataMonitoring(trainable_params, after_batch=True),
-        Printing(after_batch=True),
+        # Printing(after_batch=True),
         CheckpointNMT(config['saveto'],
                       every_n_batches=config['save_freq'])
     ]
@@ -271,40 +327,40 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
-    if config['hook_samples'] >= 1:
-        logger.info("Building sampler")
-        extensions.append(
-            Sampler(model=search_model, data_stream=tr_stream,
-                    hook_samples=config['hook_samples'],
-                    every_n_batches=config['sampling_freq'],
-                    src_vocab=source_vocab,
-                    trg_vocab=target_vocab,
-                    src_vocab_size=config['src_vocab_size']))
+    #if config['hook_samples'] >= 1:
+    #    logger.info("Building sampler")
+    #    extensions.append(
+    #        Sampler(model=search_model, data_stream=tr_stream,
+    #                hook_samples=config['hook_samples'],
+    #                every_n_batches=config['sampling_freq'],
+    #                src_vocab=source_vocab,
+    #                trg_vocab=target_vocab,
+    #                src_vocab_size=config['src_vocab_size']))
 
     # Add early stopping based on bleu
-    if config['bleu_script'] is not None:
-        logger.info("Building bleu validator")
-        extensions.append(
-            BleuValidator(sampling_input, sampling_prefix, samples=samples, config=config,
-                          model=search_model, data_stream=dev_stream,
-                          src_vocab=source_vocab,
-                          trg_vocab=target_vocab,
-                          normalize=config['normalized_bleu'],
-                          every_n_batches=config['bleu_val_freq']))
+    #if config['bleu_script'] is not None:
+    #    logger.info("Building bleu validator")
+    #    extensions.append(
+    #        BleuValidator(sampling_input, sampling_prefix, samples=samples, config=config,
+    #                      model=search_model, data_stream=dev_stream,
+    #                      src_vocab=source_vocab,
+    #                      trg_vocab=target_vocab,
+    #                      normalize=config['normalized_bleu'],
+    #                      every_n_batches=config['bleu_val_freq']))
 
     # TODO: add first-word accuracy validation
     # TODO: add IMT meteor early stopping
-    if config.get('imt_f1_validation', None) is not None:
-        logger.info("Building imt F1 validator")
-        extensions.append(
-            IMT_F1_Validator(sampling_input, sampling_prefix,
-                             samples=samples,
-                             config=config,
-                             model=search_model, data_stream=dev_stream,
-                             src_vocab=source_vocab,
-                             trg_vocab=target_vocab,
-                             normalize=config['normalized_bleu'],
-                             every_n_batches=config['bleu_val_freq']))
+    #if config.get('imt_f1_validation', None) is not None:
+    #    logger.info("Building imt F1 validator")
+    #    extensions.append(
+    #        IMT_F1_Validator(sampling_input, sampling_prefix,
+    #                         samples=samples,
+    #                         config=config,
+    #                         model=search_model, data_stream=dev_stream,
+    #                         src_vocab=source_vocab,
+    #                         trg_vocab=target_vocab,
+    #                         normalize=config['normalized_bleu'],
+    #                         every_n_batches=config['bleu_val_freq']))
 
     # Reload model if necessary
     # if config['reload']:
@@ -313,7 +369,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # Plot cost in bokeh if necessary
     if use_bokeh and BOKEH_AVAILABLE:
         extensions.append(
-            Plot(config['model_save_directory'], channels=[['decoder_cost_cost'], ['validation_set_bleu_score', 'validation_set_imt_f1_score']],
+            Plot(config['model_save_directory'], channels=[['decoder_confidence_cost_cost'], ['validation_set_bleu_score', 'validation_set_imt_f1_score']],
                  every_n_batches=10))
 
     # Set up training algorithm
@@ -324,7 +380,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     algorithm = GradientDescent(
         cost=cg.outputs[0], parameters=trainable_params,
         step_rule=CompositeRule([StepClipping(config['step_clipping']),
-                          eval(config['step_rule'])(), RemoveNotFinite()]),
+                          eval(config['step_rule'])()]),
+        # eval(config['step_rule'])(), RemoveNotFinite()]),
         # step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]),
         on_unused_sources='warn'
     )
@@ -486,8 +543,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     aux_vars = [v for v in cg.auxiliary_variables[-3:]]
     # import ipdb; ipdb.set_trace()
-
-
 
     extensions.extend([
         TrainingDataMonitoring([cost], after_batch=True),

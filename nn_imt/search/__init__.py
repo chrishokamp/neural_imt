@@ -276,6 +276,9 @@ class BeamSearch(object):
         all_masks = numpy.ones_like(all_outputs, dtype=config.floatX)
         all_costs = numpy.zeros_like(all_outputs, dtype=config.floatX)
 
+        # WORKING: add model confidences to output
+        # all_confidences = numpy.zeros_like(all_outputs, dtype=config.floatX)
+
         # Chris: get the glimpse weights as well
         prev_glimpses = states['weights'][None, :]
         all_glimpses = numpy.zeros_like(prev_glimpses, dtype=config.floatX)

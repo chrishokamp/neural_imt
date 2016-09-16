@@ -58,8 +58,10 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             transition, attention,
             add_contexts=add_contexts, name="att_trans")
 
+        self.softmax = NDimensionalSoftmax()
         super(PartialSequenceGenerator, self).__init__(
             readout, transition, **kwargs)
+        self.children.append(self.softmax)
 
         # Working: add the option to include a next-word confidence model
         if confidence_model:
@@ -71,6 +73,78 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             self.children.append(self.softmax)
             self.children.append(self.logistic)
 
+    @application
+    def probs(self, readouts):
+        return self.softmax.apply(readouts, extra_ndim=readouts.ndim - 2)
+
+    @recurrent
+    def generate(self, outputs, **kwargs):
+        """A sequence generation step.
+
+        Parameters
+        ----------
+        outputs : :class:`~tensor.TensorVariable`
+            The outputs from the previous step.
+
+        Notes
+        -----
+        The contexts, previous states and glimpses are expected as keyword
+        arguments.
+
+        """
+        states = dict_subset(kwargs, self._state_names)
+        # masks in context are optional (e.g. `attended_mask`)
+        contexts = dict_subset(kwargs, self._context_names, must_have=False)
+        glimpses = dict_subset(kwargs, self._glimpse_names)
+
+        next_glimpses = self.transition.take_glimpses(
+            as_dict=True, **dict_union(states, glimpses, contexts))
+        next_readouts = self.readout.readout(
+            feedback=self.readout.feedback(outputs),
+            **dict_union(states, next_glimpses, contexts))
+        next_outputs = self.readout.emit(next_readouts)
+        next_costs = self.readout.cost(next_readouts, next_outputs)
+        next_feedback = self.readout.feedback(next_outputs)
+        next_inputs = (self.fork.apply(next_feedback, as_dict=True)
+                       if self.fork else {'feedback': next_feedback})
+        next_states = self.transition.compute_states(
+            as_list=True,
+            **dict_union(next_inputs, states, next_glimpses, contexts))
+
+        # TODO: switch to directly getting the probs from softmax
+        next_probs = self.softmax.apply(next_readouts)
+
+        # working: optionally also query the confidence model
+        # next_merged_states = self.readout.merged_states(
+        #     feedback=self.readout.feedback(outputs),
+        #     **dict_union(states, next_glimpses, contexts))
+        # next_confidences = self.confidence_model.apply(next_merged_states)
+
+        # return (next_states + [next_outputs] +
+        #         list(next_glimpses.values()) + [next_costs] + [next_probs] + [next_confidences])
+        return (next_states + [next_outputs] +
+                list(next_glimpses.values()) + [next_costs] + [next_probs])
+
+    @generate.delegate
+    def generate_delegate(self):
+        return self.transition.apply
+
+    @generate.property('states')
+    def generate_states(self):
+        return self._state_names + ['outputs'] + self._glimpse_names
+
+    @generate.property('outputs')
+    def generate_outputs(self):
+        return (self._state_names + ['outputs'] +
+                self._glimpse_names + ['costs'] + ['word_probs'])
+
+    def get_dim(self, name):
+        if name in (self._state_names + self._context_names +
+                        self._glimpse_names):
+            return self.transition.get_dim(name)
+        elif name == 'outputs':
+            return self.readout.get_dim(name)
+        return super(BaseSequenceGenerator, self).get_dim(name)
 
     # Note: this function is only used by self.generate, because it has the recurrent decorator
     # Note: it's not used in the cost computation
@@ -392,6 +466,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         """
 
         readouts = self.get_readouts(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
+        merged_states = self.get_merged_states(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
 
         # WORKING: there is a problem with the gradient computation from this function
         # WORKING: split cost computation out of prediction
@@ -470,7 +545,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         #return y_emissions
         #return confidence_cost
 
-        return readouts
+        return readouts, merged_states
         #return y_true
 
 
@@ -482,74 +557,8 @@ class MinRiskPartialSequenceGenerator(PartialSequenceGenerator):
 
 
     def __init__(self, *args, **kwargs):
-        self.softmax = NDimensionalSoftmax()
         super(MinRiskPartialSequenceGenerator, self).__init__(*args, **kwargs)
-        self.children.append(self.softmax)
 
-    @application
-    def probs(self, readouts):
-        return self.softmax.apply(readouts, extra_ndim=readouts.ndim - 2)
-
-    @recurrent
-    def generate(self, outputs, **kwargs):
-        """A sequence generation step.
-
-        Parameters
-        ----------
-        outputs : :class:`~tensor.TensorVariable`
-            The outputs from the previous step.
-
-        Notes
-        -----
-        The contexts, previous states and glimpses are expected as keyword
-        arguments.
-
-        """
-        states = dict_subset(kwargs, self._state_names)
-        # masks in context are optional (e.g. `attended_mask`)
-        contexts = dict_subset(kwargs, self._context_names, must_have=False)
-        glimpses = dict_subset(kwargs, self._glimpse_names)
-
-        next_glimpses = self.transition.take_glimpses(
-            as_dict=True, **dict_union(states, glimpses, contexts))
-        next_readouts = self.readout.readout(
-            feedback=self.readout.feedback(outputs),
-            **dict_union(states, next_glimpses, contexts))
-        next_outputs = self.readout.emit(next_readouts)
-        next_costs = self.readout.cost(next_readouts, next_outputs)
-        next_feedback = self.readout.feedback(next_outputs)
-        next_inputs = (self.fork.apply(next_feedback, as_dict=True)
-                       if self.fork else {'feedback': next_feedback})
-        next_states = self.transition.compute_states(
-            as_list=True,
-            **dict_union(next_inputs, states, next_glimpses, contexts))
-
-        # TODO: switch to directly getting the probs from softmax
-        next_probs = self.softmax.apply(next_readouts)
-
-        return (next_states + [next_outputs] +
-                list(next_glimpses.values()) + [next_costs] + [next_probs])
-
-    @generate.delegate
-    def generate_delegate(self):
-        return self.transition.apply
-
-    @generate.property('states')
-    def generate_states(self):
-        return self._state_names + ['outputs'] + self._glimpse_names
-
-    @generate.property('outputs')
-    def generate_outputs(self):
-        return (self._state_names + ['outputs'] +
-                self._glimpse_names + ['costs'] + ['word_probs'])
-
-    def get_dim(self, name):
-        if name in (self._state_names + self._context_names +
-                        self._glimpse_names):
-            return self.transition.get_dim(name)
-        elif name == 'outputs':
-            return self.readout.get_dim(name)
-        return super(BaseSequenceGenerator, self).get_dim(name)
 
     # TODO: check where 'target_samples_mask' is used -- do we need a mask for context features (probably not)
     # Note: the @application decorator inspects the arguments, and transparently adds args  ('application_call')
@@ -756,8 +765,9 @@ class NMTPrefixDecoder(Initializable):
 
         # WORKING: add the confidence model
         confidence_model = InitializableFeedforwardSequence([
-                 Linear(input_dim=vocab_size, output_dim=1000,
-                        use_bias=True, name='confidence_model0').apply,
+                 # Linear(input_dim=vocab_size, output_dim=1000,
+                 #        use_bias=True, name='confidence_model0').apply,
+                 Bias(state_dim).apply,
                  Tanh(name='confidence_tanh').apply,
                  Linear(input_dim=state_dim, output_dim=1, use_bias=True, name='confidence_model1').apply])
         # END WORKING: add the confidence model
@@ -851,7 +861,7 @@ class NMTPrefixDecoder(Initializable):
 
     @application(inputs=['representation', 'source_sentence_mask',
                          'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
-                 outputs=['cost'])
+                 outputs=['readouts', 'merged_states'])
     def prediction_tags(self, representation, source_sentence_mask,
              target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
 
@@ -862,7 +872,7 @@ class NMTPrefixDecoder(Initializable):
         target_prefix_mask = target_prefix_mask.T
 
         # Get the cost matrix
-        tags = self.sequence_generator.prediction_tags(**{
+        readouts, merged_states = self.sequence_generator.prediction_tags(**{
             'mask': target_sentence_mask,
             'outputs': target_sentence,
             'prefix_mask': target_prefix_mask,
@@ -874,7 +884,7 @@ class NMTPrefixDecoder(Initializable):
         # transpose because tags are (time, batch)
         #return tags.T
         # WORKING: actually return the softmax output, not the tags
-        return tags
+        return readouts, merged_states
 
     # WORKING: implement word-level confidence cost
     @application(inputs=['representation', 'source_sentence_mask',
@@ -903,6 +913,32 @@ class NMTPrefixDecoder(Initializable):
         })
         return (cost_matrix * target_sentence_mask).sum() / \
                target_sentence_mask.shape[1]
+
+    # WORKING: implement word-level confidence cost
+    # WORKING: in this formulation, the "target sentence" is actually assumed to be a prediction output by the model
+    # WORKING: a better way would be to output the confidence at each generation step
+    @application(inputs=['representation', 'source_sentence_mask',
+                         'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
+                 outputs=['confidence_scores'])
+    def get_confidence(self, representation, source_sentence_mask,
+                        target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
+
+        source_sentence_mask = source_sentence_mask.T
+        target_sentence = target_sentence.T
+        target_sentence_mask = target_sentence_mask.T
+        target_prefix = target_prefix.T
+        target_prefix_mask = target_prefix_mask.T
+
+        # Get the predictions
+        confidence_scores = self.sequence_generator.confidence_predictions(**{
+            'mask': target_sentence_mask,
+            'outputs': target_sentence,
+            'prefix_mask': target_prefix_mask,
+            'prefix_outputs': target_prefix,
+            'attended': representation,
+            'attended_mask': source_sentence_mask,
+        })
+        return confidence_scores
 
 
     # Note: this requires the decoder to be using sequence_generator which implements expected cost

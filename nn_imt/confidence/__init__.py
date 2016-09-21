@@ -122,6 +122,7 @@ def get_prediction_function(exp_config):
     return prediction_function
 
 
+# WORKING: implement confidence prediction using the entire IMT graph
 def get_confidence_prediction_function(exp_config):
     # Create Theano variables
     logger.info('Creating theano variables')
@@ -176,9 +177,10 @@ def get_confidence_prediction_function(exp_config):
     decoder.transition.weights_init = Orthogonal()
     encoder.initialize()
     decoder.initialize()
+    pass
 
 
-# Copied from IMT main loop -- hacked version to do confidence prediction output
+# IMT main loop version which does confidence prediction output
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
     # add the tags from this function to the IMT datastream
@@ -188,7 +190,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     tr_stream = Mapping(tr_stream, CallFunctionOnStream(prediction_function, [1, 0, 5, 4, 7, 6]),
     #tr_stream = Mapping(tr_stream, CallFunctionOnStream(prediction_function, [6, 1, 0, 5, 4, 7]),
-                        add_sources=('readouts', 'prediction_tags'))
+                        add_sources=('predictions', 'readouts', 'prediction_tags'))
 
     import ipdb; ipdb.set_trace()
 
@@ -279,7 +281,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # END WORKING: implement confidence -- remove all params except output model
 
 
-
     # TODO: fixed dropout mask for recurrent params?
     # Print shapes
     # shapes = [param.get_value().shape for param in cg.parameters]
@@ -363,13 +364,27 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     #                         every_n_batches=config['bleu_val_freq']))
 
     # Reload model if necessary
-    # if config['reload']:
-    #     extensions.append(LoadNMT(config['saveto']))
+    if config['reload']:
+        extensions.append(LoadNMT(config['saveto']))
+
+    # TODO: hacking here: get the predictions of the confidence model using the `readouts` source of the data_stream
+    
+    # Note that the parameters of this model must be pretrained, otherwise this doesn't make sense
+    confidence_predictions = decoder.get_confidence(readouts)
+    confidence_prediction_model = Model(confidence_predictions)
+
+    confidence_param_values = LoadNMT.load_parameter_values(config['confidence_saved_parameters'], brick_delimiter=None)
+    LoadNMT.set_model_parameters(confidence_prediction_model, confidence_param_values)
+
+    confidence_prediction_func = confidence_prediction_model.get_theano_function()
+
+    import ipdb; ipdb.set_trace()
+
 
     # Plot cost in bokeh if necessary
     if use_bokeh and BOKEH_AVAILABLE:
         extensions.append(
-            Plot(config['model_save_directory'], channels=[['decoder_confidence_cost_cost'], ['validation_set_bleu_score', 'validation_set_imt_f1_score']],
+            Plot(config['model_save_directory'], channels=[['decoder_confidence_cost_cost']],
                  every_n_batches=10))
 
     # Set up training algorithm
@@ -564,5 +579,79 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Train!
     main_loop.run()
+
+
+
+# WORKING BUFFER
+# Printing out a dataset
+    # from blocks reverse_words example
+    # observables = [
+    #     cost, min_energy, max_energy, mean_activation,
+    #     batch_size, max_length, cost_per_character,
+    #     algorithm.total_step_norm, algorithm.total_gradient_norm]
+    # for name, parameter in trainable_params.items():
+    #     observables.append(parameter.norm(2).copy(name + "_norm"))
+    #     observables.append(algorithm.gradients[parameter].norm(2).copy(
+    #         name + "_grad_norm"))
+
+    # get the right args from the datastream
+    # TODO: just print source, prefix, suffix, prediction, correct to new files -- this makes sure everything is aligned
+    OUTPUT_DIR = '/media/1tb_drive/imt_models/word_prediction_accuracy_experiments/en-de/exp_1'
+    for the_file in os.listdir(OUTPUT_DIR):
+        file_path = os.path.join(OUTPUT_DIR, the_file)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            print(e)
+
+    def write_file_truncate_mask(filename, data, mask, mode='a'):
+        ''' data is list of list '''
+
+        assert len(data) == len(mask)
+        with codecs.open(filename, mode, encoding='utf8') as out:
+            for l, m in zip(data, mask):
+                output = u' '.join(l[:int(m.sum())]) + u'\n'
+                out.write(output)
+        logger.info('Wrote file: {}'.format(filename))
+
+
+    target_ivocab = {k:v.decode('utf8') for v,k in target_vocab.items()}
+    source_ivocab = {k:v.decode('utf8') for v,k in source_vocab.items()}
+    import ipdb; ipdb.set_trace()
+    tag_ivocab = {1: 'True', 0: 'False'}
+
+    test_iter = tr_stream.get_epoch_iterator()
+    it = 0
+    for t_source, t_source_mask, t_target, t_target_mask, t_target_prefix, t_target_prefix_mask, t_target_suffix, t_target_suffix_mask in test_iter:
+        if it <= 1000:
+            it += 1
+            t_cost = t_cost_func(t_source_mask, t_source, t_target_prefix_mask, t_target_prefix, t_target_suffix_mask, t_target_suffix)
+            readouts = t_cost[0]
+            preds = readouts.argmax(axis=2)
+            correct = preds.T == t_target_suffix
+
+
+            source_output = os.path.join(OUTPUT_DIR,'sources.en')
+            prefix_output = os.path.join(OUTPUT_DIR,'prefixes.de')
+            suffix_output = os.path.join(OUTPUT_DIR,'suffixes.de')
+            prediction_output = os.path.join(OUTPUT_DIR,'predictions.de')
+            correct_output = os.path.join(OUTPUT_DIR,'prefix_word_prediction_acc.out')
+
+            source_text = [[source_ivocab[w] for w in s] for s in t_source]
+            prefix_text = [[target_ivocab[w] for w in s] for s in t_target_prefix]
+            suffix_text = [[target_ivocab[w] for w in s] for s in t_target_suffix]
+            pred_text = [[target_ivocab[w] for w in s] for s in preds.T]
+            correct_text = [[tag_ivocab[w] for w in s] for s in correct]
+
+
+            for triple in zip([source_output, prefix_output, suffix_output, prediction_output, correct_output],
+                              [source_text, prefix_text, suffix_text, pred_text, correct_text],
+                              [t_source_mask, t_target_prefix_mask, t_target_suffix_mask, t_target_suffix_mask, t_target_suffix_mask]):
+                write_file_truncate_mask(*triple)
+        else:
+            break
+
+    import ipdb; ipdb.set_trace()
 
 

@@ -115,15 +115,16 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         next_probs = self.softmax.apply(next_readouts)
 
         # working: optionally also query the confidence model
-        # next_merged_states = self.readout.merged_states(
-        #     feedback=self.readout.feedback(outputs),
-        #     **dict_union(states, next_glimpses, contexts))
-        # next_confidences = self.confidence_model.apply(next_merged_states)
+        next_merged_states = self.readout.merged_states(
+            feedback=self.readout.feedback(outputs),
+            **dict_union(states, next_glimpses, contexts))
+        next_confidences = self.confidence_model.apply(next_merged_states)
+        # next_confidences = self.confidence_predictions
 
         # return (next_states + [next_outputs] +
         #         list(next_glimpses.values()) + [next_costs] + [next_probs] + [next_confidences])
         return (next_states + [next_outputs] +
-                list(next_glimpses.values()) + [next_costs] + [next_probs])
+                list(next_glimpses.values()) + [next_costs] + [next_probs] + [next_confidences])
 
     @generate.delegate
     def generate_delegate(self):
@@ -136,7 +137,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     @generate.property('outputs')
     def generate_outputs(self):
         return (self._state_names + ['outputs'] +
-                self._glimpse_names + ['costs'] + ['word_probs'])
+                self._glimpse_names + ['costs'] + ['word_probs'] + ['word_confidences'])
 
     def get_dim(self, name):
         if name in (self._state_names + self._context_names +
@@ -372,6 +373,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return readouts
 
+    @application(outputs=['merged_states'])
     def get_merged_states(self, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns the readouts (before post-merge) for every timestep in time-major matrices
 
@@ -430,18 +432,25 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return merged_states
 
-    # WORKING HERE -- get confidence model outputs and compare to the references from the datastream, compute binary CE as cost
+    # WORKING HERE -- get predictions according to the confidence model
+    @application(outputs=['confidences'])
+    def confidence_predictions(self, application_call, readouts):
+
+        #merged_states = merged_states.reshape((time_major_shape[0]*time_major_shape[1], time_major_shape[2]))
+        confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(readouts))
+
+        # the last dimension size = 1, so we can do this
+        confidences = confidence.reshape(confidence.shape[:2])
+
+        return confidences
+
+    # get confidence model outputs and compare to the references from the datastream, compute binary CE as cost
     @application
     def confidence_cost(self, application_call, outputs, prefix_outputs, prediction_tags, merged_states, mask=None, prefix_mask=None, **kwargs):
 
-        #merged_states = self.get_merged_states(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
-        #time_major_shape = merged_states.shape
-        #merged_states = merged_states.reshape((time_major_shape[0]*time_major_shape[1], time_major_shape[2]))
-        confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(merged_states))
-        # readouts  = prediction_tags.dimshuffle(2,1,0)
-        # flatten
+        #confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(merged_states))
 
-        # confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(readouts))
+        confidence = self.confidence_predictions(merged_states)
 
         # the last dimension size = 1, so we can do this
         confidence = confidence.reshape(confidence.shape[:2])
@@ -804,6 +813,7 @@ class NMTPrefixDecoder(Initializable):
         # TODO: remove the semantic overloading of the `loss_function` kwarg
         # TODO: BIG TIME HACK HERE
         # WORKING: add confidence model for IMT
+        print("loss function is: {}".format(loss_function))
         if loss_function == 'cross_entropy':
             # Note: it's the PartialSequenceGenerator which lets us condition upon the target prefix
             self.sequence_generator = PartialSequenceGenerator(
@@ -917,26 +927,13 @@ class NMTPrefixDecoder(Initializable):
     # WORKING: implement word-level confidence cost
     # WORKING: in this formulation, the "target sentence" is actually assumed to be a prediction output by the model
     # WORKING: a better way would be to output the confidence at each generation step
-    @application(inputs=['representation', 'source_sentence_mask',
-                         'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
+    @application(inputs=['readouts'],
                  outputs=['confidence_scores'])
-    def get_confidence(self, representation, source_sentence_mask,
-                        target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
-
-        source_sentence_mask = source_sentence_mask.T
-        target_sentence = target_sentence.T
-        target_sentence_mask = target_sentence_mask.T
-        target_prefix = target_prefix.T
-        target_prefix_mask = target_prefix_mask.T
+    def get_confidence(self, readouts):
 
         # Get the predictions
         confidence_scores = self.sequence_generator.confidence_predictions(**{
-            'mask': target_sentence_mask,
-            'outputs': target_sentence,
-            'prefix_mask': target_prefix_mask,
-            'prefix_outputs': target_prefix,
-            'attended': representation,
-            'attended_mask': source_sentence_mask,
+            'readouts': readouts,
         })
         return confidence_scores
 

@@ -68,6 +68,10 @@ class BeamSearch(object):
         self.context_names = self.generator.generate.contexts
         self.state_names = self.generator.generate.states
 
+        # WORKING: new function which returns all the outputs of the generate function as auxilliary variables
+        # WORKING: keep all the outputs of the generate function on the beam, parse them at the end
+        self.output_names = self.generator.generate.outputs
+
         # Parsing the inner computation graph of sampling scan
         self.contexts = [
             VariableFilter(bricks=[self.generator],
@@ -107,6 +111,11 @@ class BeamSearch(object):
                                       name=name,
                                       roles=[OUTPUT])(self.inner_cg)[-1]
                        for name in self.state_names]
+        # WORKING: how to get confidence as a dummy variable?
+        # IDEA: add to states, or compile a separate function that passes along whatever dummy outputs together with beam search
+        import ipdb; ipdb.set_trace()
+
+
         next_outputs = VariableFilter(
             applications=[self.generator.readout.emit], roles=[OUTPUT])(
                 self.inner_cg.variables)
@@ -126,11 +135,30 @@ class BeamSearch(object):
             self.contexts + self.input_states, logprobs,
             on_unused_input='ignore')
 
+    # WORKING: how to get confidence as a dummy variable?
+    # IDEA: create any functions which need to be called at each step, and add them to a list of auxilliary beam search functions
+    # IDEA: add to states, or compile a separate function that passes along whatever dummy outputs together with beam search
+    def _compile_confidence_computer(self):
+        """get the output of the confidence model for a timestep"""
+        merged_state_filter = VariableFilter(
+            roles=[OUTPUT],
+            applications=[self.generator.confidence_model.apply])
+
+        word_confidence = merged_state_filter(self.inner_cg)[0]
+        self.confidence_computer = function(
+            self.contexts + self.input_states, word_confidence,
+            on_unused_input='ignore')
+
     def compile(self):
         """Compile all Theano functions used."""
         self._compile_initial_state_and_context_computer()
         self._compile_next_state_computer()
         self._compile_logprobs_computer()
+
+        # WORKING
+        self._compile_confidence_computer()
+        # END WORKING
+
         self.compiled = True
 
     def compute_initial_states_and_contexts(self, inputs):
@@ -176,6 +204,26 @@ class BeamSearch(object):
         return self.logprobs_computer(*(list(contexts.values()) +
                                       input_states))
 
+    def compute_confidences(self, contexts, states):
+        """Compute model confidence at this timestep
+
+        Parameters
+        ----------
+        contexts : dict
+            A {name: :class:`numpy.ndarray`} dictionary of contexts.
+        states : dict
+            A {name: :class:`numpy.ndarray`} dictionary of states.
+
+        Returns
+        -------
+        A :class:`numpy.ndarray` of the (beam size, 1) representing the model's confidence
+        about its prediction for each beam entry at this timestep
+
+        """
+        input_states = [states[name] for name in self.input_state_names]
+        return self.confidence_computer(*(list(contexts.values()) +
+                                        input_states))
+
     def compute_next_states(self, contexts, states, outputs):
         """Computes next states.
 
@@ -197,6 +245,7 @@ class BeamSearch(object):
         next_values = self.next_state_computer(*(list(contexts.values()) +
                                                  input_states + [outputs]))
         return OrderedDict(equizip(self.state_names, next_values))
+
 
     @staticmethod
     def _smallest(matrix, k, only_first_row=False):
@@ -276,9 +325,6 @@ class BeamSearch(object):
         all_masks = numpy.ones_like(all_outputs, dtype=config.floatX)
         all_costs = numpy.zeros_like(all_outputs, dtype=config.floatX)
 
-        # WORKING: add model confidences to output
-        # all_confidences = numpy.zeros_like(all_outputs, dtype=config.floatX)
-
         # Chris: get the glimpse weights as well
         prev_glimpses = states['weights'][None, :]
         all_glimpses = numpy.zeros_like(prev_glimpses, dtype=config.floatX)
@@ -311,6 +357,13 @@ class BeamSearch(object):
 
             ordered_glimpses = states['weights'][None, :]
             all_glimpses = numpy.vstack([all_glimpses, ordered_glimpses])
+
+            # WORKING
+            confidences = self.compute_confidences(contexts, states)
+            # TODO: put sigmoid on confidence output
+            # 1 / (1 + numpy.exp(-confidences))
+            import ipdb; ipdb.set_trace()
+            # END WORKING
 
             # Record chosen output and compute new states
             states.update(self.compute_next_states(contexts, states, outputs))

@@ -145,12 +145,12 @@ class CallFunctionOnStream:
         output = self.function(*[data[idx] for idx in self.arg_indices])
 
         # HACK: this is specific to the confidence model usecase
-        tags = output[0].argmax(axis=-1)
-        tags = (tags.T == data[6]).astype('float32')
+        predictions = output[0].argmax(axis=-1).T
+        tags = (predictions == data[6]).astype('float32')
 
         # WORKING: return both the merged states, and the tags
 
-        return (output[1],tags)
+        return (predictions, output[1], tags)
 
 
 # Module for functionality associated with streaming data

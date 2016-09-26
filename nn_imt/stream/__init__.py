@@ -117,7 +117,7 @@ class PrefixSuffixStreamTransformer:
         return (target_prefixes, target_suffixes)
 
 
-class CallFunctionOnStream:
+class CallPredictionFunctionOnStream:
     """
     Init with a function, and let the user specify the indices (and order of indices) which will be used to call the
     function
@@ -429,7 +429,7 @@ def get_dev_stream_with_prefix_file(val_set=None, val_set_grndtruth=None, val_se
     """Setup development stream with user-provided source, target, prefixes, and suffixes"""
 
     dev_stream = None
-    if val_set is not None and val_set_grndtruth is not None and val_set_prefixes is not None:
+    if val_set is not None and val_set_grndtruth is not None and val_set_prefixes is not None and val_set_suffixes is not None:
         src_vocab = _ensure_special_tokens(
             src_vocab if isinstance(src_vocab, dict) else
             cPickle.load(open(src_vocab)),

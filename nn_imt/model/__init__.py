@@ -114,12 +114,13 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # TODO: switch to directly getting the probs from softmax
         next_probs = self.softmax.apply(next_readouts)
 
-        # working: optionally also query the confidence model
+        # also query the confidence model
         next_merged_states = self.readout.merged_states(
             feedback=self.readout.feedback(outputs),
             **dict_union(states, next_glimpses, contexts))
         next_confidences = self.confidence_model.apply(next_merged_states)
-        # next_confidences = self.confidence_predictions
+
+        # WORKING: implement confidence model _after_ prediction (once the next state has been generated)
 
         # return (next_states + [next_outputs] +
         #         list(next_glimpses.values()) + [next_costs] + [next_probs] + [next_confidences])
@@ -314,11 +315,59 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return costs
 
+    # WORKING: return the final states -- intuitively the last thing that happens at this timestep
+    def get_final_states(self, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
+        """Returns the final states at this timestep -- compute the glimpses, readouts and emissions, then run the transition
+         to get the states. The state representation is computed _after_ a word has been predicted
+
+        """
+
+        # We assume the data has axes (time, batch, features, ...)
+        batch_size = outputs.shape[1]
+
+        # run the model through the target prefix, then init the model with the correct states
+        prefix_feedback = self.readout.feedback(prefix_outputs)
+        prefix_inputs = self.fork.apply(prefix_feedback, as_dict=True)
+
+        # Prepare input for the iterative part
+        states = dict_subset(kwargs, self._state_names, must_have=False)
+
+        # masks in context are optional (e.g. `attended_mask`)
+        contexts = dict_subset(kwargs, self._context_names, must_have=False)
+
+        # first run the recurrent transition for the target_prefix, then use the final states from the
+        # the prefix to initialize the suffix generation
+        prefix_results = self.transition.apply(
+            mask=prefix_mask, return_initial_states=True, as_dict=True,
+            **dict_union(prefix_inputs, states, contexts))
+
+        # TODO: does this make sense for the initial glimpses? these are the glimpses we used
+        # TODO: to compute the last word of the prefix
+        prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
+
+        prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
+
+        # Now compute the suffix representation, and use the prefix initial states to init the recurrent transition
+        feedback = self.readout.feedback(outputs)
+        inputs = self.fork.apply(feedback, as_dict=True)
+
+        # Run the recurrent network
+        results = self.transition.apply(
+            mask=mask, return_initial_states=True, as_dict=True,
+            initial_states=prefix_initial_states,
+            initial_glimpses=prefix_initial_glimpses,
+            **dict_union(inputs, states, contexts))
+
+        # the initial state is not used because it's generated before we've predicted anything
+        states = {name: results[name][1:] for name in self._state_names}
+
+        return states['states']
+
     def get_readouts(self, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns the readouts (before post-merge) for every timestep in time-major matrices
 
-
         """
+
         # We assume the data has axes (time, batch, features, ...)
         batch_size = outputs.shape[1]
 
@@ -437,7 +486,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     def confidence_predictions(self, application_call, readouts):
 
         #merged_states = merged_states.reshape((time_major_shape[0]*time_major_shape[1], time_major_shape[2]))
-        confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(readouts))
+        # confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(readouts))
+        confidence = self.confidence_model.apply(readouts)
 
         # the last dimension size = 1, so we can do this
         confidences = confidence.reshape(confidence.shape[:2])
@@ -447,8 +497,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     # get confidence model outputs and compare to the references from the datastream, compute binary CE as cost
     @application
     def confidence_cost(self, application_call, outputs, prefix_outputs, prediction_tags, merged_states, mask=None, prefix_mask=None, **kwargs):
-
-        #confidence = theano.tensor.nnet.sigmoid(self.confidence_model.apply(merged_states))
 
         confidence = self.confidence_predictions(merged_states)
 
@@ -475,10 +523,11 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         """
 
         readouts = self.get_readouts(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
-        merged_states = self.get_merged_states(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
 
-        # WORKING: there is a problem with the gradient computation from this function
-        # WORKING: split cost computation out of prediction
+        # WORKING: use the states _after_ the output token has been generated
+        # merged_states = self.get_merged_states(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
+        merged_states = self.get_final_states(outputs, prefix_outputs, mask, prefix_mask, **kwargs)
+
         # get the model emissions at every timestep
         # y_emissions = readouts.argmax(axis=0)
         y_emissions = readouts.argmax(axis=-1)
@@ -549,15 +598,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         #application_call.add_auxiliary_variable(confidence_cost, name='confidence_cost')
         # application_call.add_auxiliary_variable(confidence)
 
-        #return readouts,y_equal
-        #return y_equal
-        #return y_emissions
-        #return confidence_cost
-
         return readouts, merged_states
-        #return y_true
-
-
 
 
 # TODO: change the interface of this sequence generator to compute costs at sampling time, not cost time
@@ -776,9 +817,15 @@ class NMTPrefixDecoder(Initializable):
         confidence_model = InitializableFeedforwardSequence([
                  # Linear(input_dim=vocab_size, output_dim=1000,
                  #        use_bias=True, name='confidence_model0').apply,
-                 Bias(state_dim).apply,
-                 Tanh(name='confidence_tanh').apply,
-                 Linear(input_dim=state_dim, output_dim=1, use_bias=True, name='confidence_model1').apply])
+                 Bias(dim=state_dim, name='maxout_bias').apply,
+                 Maxout(num_pieces=2, name='maxout').apply,
+                 Linear(input_dim=state_dim / 2, output_dim=300, use_bias=True, name='confidence_model1').apply,
+                 Tanh().apply,
+                 Linear(input_dim=300, output_dim=100, use_bias=True, name='confidence_model2').apply,
+                 Tanh().apply,
+                 Linear(input_dim=100, output_dim=1, use_bias=True, name='confidence_model3').apply,
+                 Logistic().apply])
+                 # Linear(input_dim=state_dim, output_dim=1, use_bias=True, name='confidence_model1').apply])
         # END WORKING: add the confidence model
 
 

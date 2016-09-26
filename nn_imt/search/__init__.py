@@ -111,10 +111,6 @@ class BeamSearch(object):
                                       name=name,
                                       roles=[OUTPUT])(self.inner_cg)[-1]
                        for name in self.state_names]
-        # WORKING: how to get confidence as a dummy variable?
-        # IDEA: add to states, or compile a separate function that passes along whatever dummy outputs together with beam search
-        import ipdb; ipdb.set_trace()
-
 
         next_outputs = VariableFilter(
             applications=[self.generator.readout.emit], roles=[OUTPUT])(
@@ -269,6 +265,7 @@ class BeamSearch(object):
             flatten = matrix[:1, :].flatten()
         else:
             flatten = matrix.flatten()
+        # the argpartition is just to make the sort more efficient
         args = numpy.argpartition(flatten, k)[:k]
         args = args[numpy.argsort(flatten[args])]
         return numpy.unravel_index(args, matrix.shape), flatten[args]
@@ -329,16 +326,26 @@ class BeamSearch(object):
         prev_glimpses = states['weights'][None, :]
         all_glimpses = numpy.zeros_like(prev_glimpses, dtype=config.floatX)
 
+        # Note: confidence at timestep zero is always = 1
+        all_confidences = numpy.ones_like(all_outputs, dtype=config.floatX)
+
         for i in range(max_length):
+            # if every sequence is already finished
             if all_masks[-1].sum() == 0:
                 break
 
             # We carefully hack values of the `logprobs` array to ensure
             # that all finished sequences are continued with `eos_symbol`.
+            # logprobs: (beam_size, target_vocab_size)
             logprobs = self.compute_logprobs(contexts, states)
+            # The additional dim (`None`) is needed to maintain 2d, and to
+            # make the broadcasting of `logprobs * all_masks[-1, :, None] work
             next_costs = (all_costs[-1, :, None] +
                           logprobs * all_masks[-1, :, None])
             (finished,) = numpy.where(all_masks[-1] == 0)
+
+            # every cost to the left and to the right of the EOL symbol is infinite, so any sequence
+            # that is finished will certainly be continued with the EOL symbol
             next_costs[finished, :eol_symbol] = numpy.inf
             next_costs[finished, eol_symbol + 1:] = numpy.inf
 
@@ -358,18 +365,16 @@ class BeamSearch(object):
             ordered_glimpses = states['weights'][None, :]
             all_glimpses = numpy.vstack([all_glimpses, ordered_glimpses])
 
-            # WORKING
-            confidences = self.compute_confidences(contexts, states)
-            # TODO: put sigmoid on confidence output
-            # 1 / (1 + numpy.exp(-confidences))
-            import ipdb; ipdb.set_trace()
-            # END WORKING
+            # Note that confidences are already in sorted order, since we passed the states in sorted order
+            confidences = self.compute_confidences(contexts, states).T
+            all_confidences = numpy.vstack([all_confidences, confidences])
 
             # Record chosen output and compute new states
             states.update(self.compute_next_states(contexts, states, outputs))
             all_outputs = numpy.vstack([all_outputs, outputs[None, :]])
             all_costs = numpy.vstack([all_costs, chosen_costs[None, :]])
 
+            # The new mask for this timestep
             mask = outputs != eol_symbol
             if ignore_first_eol and i == 0:
                 mask[:] = 1
@@ -379,23 +384,27 @@ class BeamSearch(object):
         all_masks = all_masks[:-1]
         all_costs = all_costs[1:] - all_costs[:-1]
         all_glimpses = all_glimpses[1:]
+        all_confidences = all_confidences[1:]
 
-        result = all_outputs, all_masks, all_costs, all_glimpses
+        result = all_outputs, all_masks, all_costs, all_glimpses, all_confidences
         if as_arrays:
             return result
         return self.result_to_lists(result)
 
     @staticmethod
     def result_to_lists(result):
-        outputs, masks, costs = [array.T for array in result[:-1]]
-        glimpses = result[-1].transpose((1,0,2))
+        outputs, masks, costs = [array.T for array in result[:3]]
+        glimpses = result[3].transpose((1,0,2))
         outputs = [list(output[:mask.sum()])
                    for output, mask in equizip(outputs, masks)]
         glimpses = [list(glimpse[:mask.sum()])
                     for glimpse, mask in equizip(glimpses, masks)]
-        # WORKING HERE: we want the cost for each item, not the sequence-level cost
-        # TODO: we need the sequence level cost to know which sequence is best, so return one more thing from this function
         sequence_costs = list(costs.T.sum(axis=0))
         word_level_costs = [list(cost[:mask.sum()])
                    for cost, mask in equizip(costs, masks)]
-        return outputs, sequence_costs, glimpses, word_level_costs
+
+        confidences = result[4].T
+        timestep_confidences = [list(confidence[:mask.sum()])
+                                for confidence, mask in equizip(confidences, masks)]
+
+        return outputs, sequence_costs, glimpses, word_level_costs, timestep_confidences

@@ -188,9 +188,13 @@ if __name__ == "__main__":
 
             glimpse_file = config_obj.get('glimpse_file', None)
             word_level_cost_file = config_obj.get('word_level_cost_file', None)
+            confidence_output_file = config_obj.get('confidence_output_file', None)
             source_output_file = config_obj.get('source_output_file', None)
-            predictor.predict_files(sources_file, prediction_prefixes, output_file=config_obj['translated_output_file'],
-                                    glimpse_file=glimpse_file, word_level_cost_file=word_level_cost_file,
+            predictor.predict_files(sources_file, prediction_prefixes,
+                                    output_file=config_obj['translated_output_file'],
+                                    glimpse_file=glimpse_file,
+                                    word_level_cost_file=word_level_cost_file,
+                                    confidence_output_file=confidence_output_file,
                                     source_output_file=source_output_file)
 
             logger.info('Done translating, now I will evaluate the metrics: {}'.format(evaluation_metrics))
@@ -263,14 +267,24 @@ if __name__ == "__main__":
             imt_ndcg_score = imt_ndcg_from_files(translated_output_file, references_file)
             logger.info('IMT_NDCG SCORE: {}'.format(imt_ndcg_score))
 
-    # WORKING: train a model of next-word confidence: how sure am I that the next word is correct, given what came before?
+    # train a model of next-word confidence: how sure am I that the next word is correct, given what came before?
     elif mode == 'confidence':
 
-        import ipdb; ipdb.set_trace()
+        # Get data streams and call main
+        training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
+
+        # TODO: support both modes of creating validation data -- look at the config file to see which one to use
+        # TODO: validation is currently not supported in confidence mode
+        dev_stream = get_dev_stream_with_prefix_file(**config_obj)
+
+        confidence.main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
+
+
+    # this mode is used to output the confidence model scores for a datastream consisting of (source, prefix, hyp)
+    elif mode == 'output-confidence':
         # build the IMT model with a different predictor
         # if we're only predicting confidence about the next word, this model is simpler than MT
         # because we don't need to feed recurrent inputs back in
-
 
         # confidence 'score' is classification accuracy (RIGHT/WRONG) on the dev set
         # load the trained model
@@ -289,15 +303,53 @@ if __name__ == "__main__":
 
         # To evaluate dynamic confidence, we want to know how confidence truncation affects IMT F1, or IMT NDCG
         # - note that if we are just training the confidence model, it would be faster to pre-translate
+        # create the tr datastream,
+        # call confidence_model.apply(get_final_states(tr_stream)
+        # transpose and write confidences to file
+        logger.info("Started computing confidence scores: ")
+        val_start_time = time.time()
 
-        # Get data streams and call main
-        training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
+        required_config_keys = ['val_set', 'val_set_grndtruth', 'val_set_prefixes', 'val_set_suffixes']
+        assert all([k in config_obj for k in required_config_keys]), 'all keys in: {} must be present in your configuration'.format(required_config_keys)
 
-        # TODO: support both modes of creating validation data -- look at the config file to see which one to use
-        dev_stream = get_dev_stream_with_prefix_file(**config_obj)
+        prediction_stream = get_dev_stream_with_prefix_file(**config_obj)
 
-        confidence.main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
-        pass
+        # build the model and the graph which will get confidence values
+        # WORKING HERE: output the confidence scores for the data in the prediction stream
+        confidence.output_confidence_scores(config_obj, prediction_stream)
+        # WORKING HERE: implement the function above
+
+
+
+# tune on a small set of static samples
+# Validation set source file
+# 'val_set': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_prefixes.generated.sources.1000.samples'
+# Validation set gold file (TODO: this is legacy from MT repo -- not actually needed for static IMT evaluation)
+# 'val_set_grndtruth': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_suffixes.generated.1000.samples'
+# validation prefixes
+# 'val_set_prefixes': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_prefixes.generated.1000.samples'
+# validation suffixes
+# 'val_set_suffixes': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_suffixes.generated.1000.samples'
+
+# Print validation output to file
+# 'output_val_set': True
+
+# Validation output file
+# 'val_set_out': !path_join [*OUTPUT_DIR, 'validation_out.txt']
+
+
+        # translate if necessary, write output file, call external evaluation tools and show output
+        # TODO: there is an error here if we don't check that hyps and refs have the same number of lines
+        # translated_output_file = config_obj.get('translated_output_file', None)
+        # if translated_output_file is not None and os.path.isfile(translated_output_file):
+        #     logger.info('{} already exists, so I\'m evaluating the BLEU score of this file with respect to the ' +
+        #                 'reference that you provided: {}'.format(translated_output_file,
+        #                                                          config_obj['test_gold_refs']))
+        #     references_file = config_obj['test_gold_refs']
+        # else:
+        #     predictor = IMTPredictor(config_obj)
+        # pass
+
 
 
     elif mode == 'server':

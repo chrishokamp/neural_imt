@@ -365,7 +365,7 @@ class IMTPredictor:
         return [index.get(w, unknown_token) for w in sentence]
 
     def predict_files(self, source_file, prefix_file, output_file=None, glimpse_file=None, word_level_cost_file=None,
-                      source_output_file=None):
+                      source_output_file=None, confidence_output_file=None):
 
         tokenize = self.source_tokenizer_cmd is not None
         detokenize = self.detokenizer_cmd is not None
@@ -383,6 +383,7 @@ class IMTPredictor:
 
         all_nbest_glimpses = []
         all_nbest_word_level_costs = []
+        all_nbest_confidences = []
         source_seqs = []
         with codecs.open(source_file, encoding='utf8') as srcs:
             with codecs.open(prefix_file, encoding='utf8') as prefixes:
@@ -400,20 +401,29 @@ class IMTPredictor:
                     source_seq = instance[0].split()
                     prefix_seq = instance[1].split()
 
-                    translations, costs, glimpses, word_level_costs, src = self.predict_segment(source_seq, target_prefix=prefix_seq,
-                                                                              n_best=self.n_best,
-                                                                              tokenize=tokenize, detokenize=detokenize)
+                    translations, costs, glimpses, word_level_costs, timestep_confidences, src = \
+                        self.predict_segment(source_seq, target_prefix=prefix_seq,
+                                             n_best=self.n_best,
+                                             tokenize=tokenize, detokenize=detokenize)
 
                     # predict_segment returns a list of hyps, we take the best ones
                     nbest_translations = translations[:self.n_best]
                     nbest_costs = costs[:self.n_best]
-                    nbest_glimpses = glimpses[:self.n_best]
                     source_seqs.append(src)
 
+                    nbest_glimpses = glimpses[:self.n_best]
                     all_nbest_glimpses.append(nbest_glimpses)
 
                     nbest_word_level_costs = word_level_costs[:self.n_best]
                     all_nbest_word_level_costs.append(nbest_word_level_costs)
+
+                    nbest_confidences = timestep_confidences[:self.n_best]
+                    all_nbest_confidences.append(nbest_confidences)
+
+                    try:
+                        assert len(glimpses[0]) == len(word_level_costs[0]) == len(timestep_confidences[0])
+                    except AssertionError:
+                        import ipdb; ipdb.set_trace()
 
                     if self.n_best == 1:
                         ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
@@ -442,6 +452,10 @@ class IMTPredictor:
                 numpy.save(wl_costs_out, all_nbest_word_level_costs)
             logger.info("Saved word level cost weights to: {}".format(word_level_cost_file))
 
+        if confidence_output_file is not None:
+            with open(confidence_output_file, 'w') as confidence_out:
+                numpy.save(confidence_out, all_nbest_confidences)
+            logger.info("Wrote confidence model outputs to: {}".format(confidence_output_file))
 
         if source_output_file is not None:
             with codecs.open(source_output_file, 'w', encoding='utf8') as src_out:
@@ -495,7 +509,7 @@ class IMTPredictor:
 
             prefix_input_ = numpy.tile(prefix_seq, (self.exp_config['beam_size'], 1))
             # draw sample, checking to ensure we don't get an empty string back
-            trans, costs, glimpses, word_level_costs = \
+            trans, costs, glimpses, word_level_costs, timestep_confidences = \
                 self.beam_search.search(
                     input_values={self.source_sampling_input: input_,
                                   self.target_sampling_input: prefix_input_},
@@ -519,6 +533,8 @@ class IMTPredictor:
         best_n_costs = []
         best_n_glimpses = []
         best_n_word_level_costs = []
+        best_n_confidences = []
+
         best_n_idxs = numpy.argsort(costs)[:n_best]
         for j, idx in enumerate(best_n_idxs):
             try:
@@ -526,6 +542,7 @@ class IMTPredictor:
                 cost = costs[idx]
                 glimpse = glimpses[idx]
                 word_level_cost = word_level_costs[idx]
+                timestep_confidence = timestep_confidences[idx]
 
                 # convert idx to words
                 # `line` is a tuple with one item
@@ -557,9 +574,10 @@ class IMTPredictor:
             best_n_hyps.append(trans_out)
             best_n_costs.append(cost)
             best_n_word_level_costs.append(word_level_cost)
+            best_n_confidences.append(timestep_confidence)
             best_n_glimpses.append(glimpse)
 
-        return best_n_hyps, best_n_costs, best_n_glimpses, best_n_word_level_costs, src_in
+        return best_n_hyps, best_n_costs, best_n_glimpses, best_n_word_level_costs, best_n_confidences, src_in
 
 
 # TODO: use the refs properly as specified in the function signature

@@ -114,11 +114,15 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # TODO: switch to directly getting the probs from softmax
         next_probs = self.softmax.apply(next_readouts)
 
+        # WORKING: switch from merged_states to final_states
         # also query the confidence model
-        next_merged_states = self.readout.merged_states(
-            feedback=self.readout.feedback(outputs),
-            **dict_union(states, next_glimpses, contexts))
-        next_confidences = self.confidence_model.apply(next_merged_states)
+        #next_merged_states = self.readout.merged_states(
+        #    feedback=self.readout.feedback(outputs),
+        #    **dict_union(states, next_glimpses, contexts))
+
+
+        next_confidences = self.confidence_model.apply(next_states[0])
+        import ipdb;ipdb.set_trace()
 
         # WORKING: implement confidence model _after_ prediction (once the next state has been generated)
 
@@ -481,7 +485,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return merged_states
 
-    # WORKING HERE -- get predictions according to the confidence model
     @application(outputs=['confidences'])
     def confidence_predictions(self, application_call, readouts):
 

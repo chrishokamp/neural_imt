@@ -314,9 +314,11 @@ if __name__ == "__main__":
 
         prediction_stream = get_dev_stream_with_prefix_file(**config_obj)
 
+	confidence_predictor = confidence.ConfidencePredictor(config_obj) 
+	confidence_predictor.predict_from_stream(prediction_stream, config_obj['confidence_output_file'])
+
         # build the model and the graph which will get confidence values
         # WORKING HERE: output the confidence scores for the data in the prediction stream
-        confidence.output_confidence_scores(config_obj, prediction_stream)
         # WORKING HERE: implement the function above
 
 

@@ -122,6 +122,53 @@ def get_prediction_function(exp_config):
     return prediction_function
 
 
+def get_confidence_function(exp_config):
+
+    # Create Theano variables
+    logger.info('Creating theano variables')
+    source_sentence = tensor.lmatrix('source')
+    source_sentence_mask = tensor.matrix('source_mask')
+    target_sentence = tensor.lmatrix('target_suffix')
+    target_sentence_mask = tensor.matrix('target_suffix_mask')
+    target_prefix = tensor.lmatrix('target_prefix')
+    target_prefix_mask = tensor.matrix('target_prefix_mask')
+
+    logger.info('Creating computational graph')
+
+    # build the model
+    encoder = BidirectionalEncoder(
+        exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
+
+    # Note: the 'min_risk' kwarg tells the decoder which sequence_generator and cost_function to use
+    decoder = NMTPrefixDecoder(
+        exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
+        exp_config['enc_nhids'] * 2, loss_function='cross_entropy')
+
+    # rename to match baseline NMT systems
+    decoder.name = 'decoder'
+
+    _, merged_states = decoder.prediction_tags(
+        encoder.apply(source_sentence, source_sentence_mask),
+        source_sentence_mask, target_sentence, target_sentence_mask,
+        target_prefix, target_prefix_mask)
+
+    confidence_output = decoder.sequence_generator.confidence_predictions(merged_states)
+
+    logger.info('Creating computational graph')
+    confidence_model = Model(confidence_output)
+
+    # Note that the parameters of this model must be pretrained, otherwise this doesn't make sense
+    param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=None)
+    LoadNMT.set_model_parameters(confidence_model, param_values)
+
+    confidence_param_values = LoadNMT.load_parameter_values(exp_config['confidence_saved_parameters'], brick_delimiter=None)
+    LoadNMT.set_model_parameters(confidence_model, confidence_param_values)
+
+    confidence_function = confidence_model.get_theano_function()
+
+    return confidence_function
+
+
 # IMT main loop version which does confidence prediction output
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
@@ -526,6 +573,46 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # Train!
     main_loop.run()
 
+
+class ConfidencePredictor:
+    """Use a trained model to output just the confidence scores for (source, prefix, hyp) inputs"""
+
+    def __init__(self, exp_config):
+        # TODO: argument order for this function
+        self.confidence_output_function = get_confidence_function(exp_config=exp_config)
+	#function inputs: [source_mask, source, target_prefix_mask, target_prefix, target_suffix_mask, target_suffix]
+
+
+        # make sure to truncate outputs using mask, or predict line by line
+    def predict_from_stream(self, prediction_stream, output_file):
+        # iteratively predict for every item in the stream
+	stream_iter = prediction_stream.get_epoch_iterator()
+
+        word_level_confidences = []
+	segment_idx = 0
+        for data in stream_iter:
+	    if segment_idx % 100 == 0:
+                logger.info('Getting confidence for segment: {}'.format(segment_idx))
+	    segment_idx += 1
+
+            source, target, target_prefix, target_suffix = [numpy.array([numpy.array(d)]) for d in data]
+	    # fake the masks
+	    source_mask = numpy.ones(source.shape, dtype='float32')
+	    target_prefix_mask = numpy.ones(target_prefix.shape, dtype='float32')
+	    # TODO: the target suffix should be the model's prediction
+	    target_suffix_mask = numpy.ones(target_suffix.shape, dtype='float32')
+
+	    # call the confidence_output_function
+	    target_word_confidence = self.confidence_output_function(source_mask, source, target_prefix_mask,
+			                                             target_prefix, target_suffix_mask, target_suffix)
+
+	    # back to (batch, time)
+	    target_word_confidence = target_word_confidence[0].T
+	    word_level_confidences.append([list(target_word_confidence[0])])
+
+        # write output file
+	numpy.save(open(output_file, 'w'), word_level_confidences)
+	logger.info('Wrote confidence scores to: {}'.format(output_file))
 
 
 # WORKING BUFFER

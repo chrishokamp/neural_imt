@@ -820,9 +820,13 @@ class NMTPrefixDecoder(Initializable):
         confidence_model = InitializableFeedforwardSequence([
                  # Linear(input_dim=vocab_size, output_dim=1000,
                  #        use_bias=True, name='confidence_model0').apply,
-                 Bias(dim=state_dim, name='maxout_bias').apply,
-                 Maxout(num_pieces=2, name='maxout').apply,
-                 Linear(input_dim=state_dim / 2, output_dim=300, use_bias=True, name='confidence_model1').apply,
+                 # Bias(dim=state_dim, name='maxout_bias').apply,
+                 # Maxout(num_pieces=2, name='maxout').apply,
+                 # Linear(input_dim=state_dim / 2, output_dim=300, use_bias=True, name='confidence_model1').apply,
+
+                 # we add one to the state dim because we added the softmax argmax probability as a feature
+                 Bias(dim=state_dim + 1, name='maxout_bias').apply,
+                 Linear(input_dim=state_dim + 1, output_dim=300, use_bias=True, name='confidence_model1').apply,
                  Tanh().apply,
                  Linear(input_dim=300, output_dim=100, use_bias=True, name='confidence_model2').apply,
                  Tanh().apply,
@@ -941,9 +945,6 @@ class NMTPrefixDecoder(Initializable):
             'attended_mask': source_sentence_mask,
         })
 
-        # transpose because tags are (time, batch)
-        #return tags.T
-        # WORKING: actually return the softmax output, not the tags
         return readouts, merged_states
 
     # WORKING: implement word-level confidence cost

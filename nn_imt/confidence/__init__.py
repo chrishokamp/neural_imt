@@ -46,6 +46,7 @@ from blocks.main_loop import MainLoop
 from blocks.model import Model
 from blocks.select import Selector
 from blocks_extras.extensions.plot import Plot
+from blocks.roles import WEIGHT
 
 from machine_translation.checkpoint import CheckpointNMT, LoadNMT, RunExternalValidation
 from machine_translation.model import BidirectionalEncoder
@@ -179,7 +180,15 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     tr_stream = Mapping(tr_stream, CallPredictionFunctionOnStream(prediction_function, [1, 0, 5, 4, 7, 6]),
     #tr_stream = Mapping(tr_stream, CallFunctionOnStream(prediction_function, [6, 1, 0, 5, 4, 7]),
-                        add_sources=('predictions', 'readouts', 'prediction_tags'))
+                        add_sources=('predictions', 'orig_readouts', 'prediction_tags'))
+
+    # now datastream has 11 things
+    import ipdb; ipdb.set_trace()
+
+    # WORKING: call prediction function twice to get new readouts on predictions instead of reference suffs
+    # the only difference is the index of the suffix
+    tr_stream = Mapping(tr_stream, CallPredictionFunctionOnStream(prediction_function, [1, 0, 5, 4, 7, 8]),
+                        add_sources=('dummy_predictions', 'readouts', 'dummy_prediction_tags'))
 
     import ipdb; ipdb.set_trace()
 
@@ -223,6 +232,9 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         source_sentence_mask, target_sentence, target_sentence_mask,
         target_prefix, target_prefix_mask, readouts, prediction_tags)
 
+    # WORKING: add l2 regularization
+
+
     logger.info('Creating computational graph')
     # working: implement cost for confidence model
     cg = ComputationGraph(cost)
@@ -240,6 +252,15 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     decoder.initialize()
 
     import ipdb;ipdb.set_trace()
+    #cost_cg = ComputationGraph(cost)
+    if config['l2_reg']:
+        l2_reg_alpha = config['l2_reg_alpha']
+        model_weights = VariableFilter(roles=[WEIGHT])(cg.variables)
+        for W in model_weights:
+            cost = cost + (l2_reg_alpha * (W ** 2).sum())
+        # do we need to name the cost variable again?
+        cost.name = 'cost'
+        cg = ComputationGraph(cost)
 
     # apply dropout for regularization
     if config['dropout'] < 1.0:
@@ -370,7 +391,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # Plot cost in bokeh if necessary
     if use_bokeh and BOKEH_AVAILABLE:
         extensions.append(
-            Plot(config['model_save_directory'], channels=[['decoder_confidence_cost_cost']],
+            # Plot(config['model_save_directory'], channels=[['decoder_confidence_cost_cost']],
+            Plot(config['model_save_directory'], channels=[['cost']],
                  every_n_batches=10))
 
     # Set up training algorithm
@@ -381,7 +403,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     algorithm = GradientDescent(
         cost=cg.outputs[0], parameters=trainable_params,
         step_rule=CompositeRule([StepClipping(config['step_clipping']),
-                          eval(config['step_rule'])()]),
+                                 eval(config['step_rule'])()]),
         # eval(config['step_rule'])(), RemoveNotFinite()]),
         # step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]),
         on_unused_sources='warn'

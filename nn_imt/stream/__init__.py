@@ -138,10 +138,7 @@ class CallPredictionFunctionOnStream:
 
     def __call__(self, data, **kwargs):
 
-        # Note: we're returning a tuple with a single item, so that this function can be used with
-        # Note: the kwarg `add_sources` of a Fuel Mapping
-        # Note: since the convention is for a theano function to return a list, we take the first thing
-        # Note: in the returned list
+        # Note: remember that the convention is for a theano function to return a list, so `output` is always a list
         output = self.function(*[data[idx] for idx in self.arg_indices])
 
         # HACK: this is specific to the confidence model usecase
@@ -149,8 +146,16 @@ class CallPredictionFunctionOnStream:
         tags = (predictions == data[6]).astype('float32')
 
         # WORKING: return both the merged states, and the tags
+        # WORKING: add softmax score of the chosen tag to the output
+        # import ipdb; ipdb.set_trace()
+        # (time, batch, vocab)
+        exp_output = numpy.exp(output[0])
+        softmax_probs = exp_output / numpy.repeat(numpy.sum(exp_output, axis=-1)[:,:,None], exp_output.shape[-1], axis=-1)
+        softmax_feature = numpy.max(softmax_probs, axis=-1)[:, :, None]
+        all_features = numpy.concatenate([output[1], softmax_feature], axis=-1)
 
-        return (predictions, output[1], tags)
+        # return (predictions, output[1], tags)
+        return (predictions, all_features, tags)
 
 
 # Module for functionality associated with streaming data

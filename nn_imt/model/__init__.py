@@ -824,8 +824,10 @@ class NMTPrefixDecoder(Initializable):
                  # Maxout(num_pieces=2, name='maxout').apply,
                  # Linear(input_dim=state_dim / 2, output_dim=300, use_bias=True, name='confidence_model1').apply,
 
+                 # WORKING: adding the softmax feature is currently hacked because it's not supported at inference time (in search and generation)
                  # we add one to the state dim because we added the softmax argmax probability as a feature
-                 Linear(input_dim=state_dim + 1, output_dim=300, use_bias=True, name='confidence_model1').apply,
+                 # Linear(input_dim=state_dim + 1, output_dim=300, use_bias=True, name='confidence_model1').apply,
+                 Linear(input_dim=state_dim, output_dim=300, use_bias=True, name='confidence_model1').apply,
                  Tanh().apply,
                  Linear(input_dim=300, output_dim=100, use_bias=True, name='confidence_model2').apply,
                  Tanh().apply,

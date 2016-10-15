@@ -249,7 +249,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         data_stream=tr_stream,
         extensions=extensions
     )
-    import ipdb;ipdb.set_trace()
 
     # Train!
     main_loop.run()
@@ -296,18 +295,28 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
 
     # optionally set beam search model parameter values from an .npz file
     # Note: we generally would set the model params in this way when doing only prediction/evaluation
+    # Go ahead and initialize to some random values -- this is because the confidence model params below are optional
+    if not hasattr(encoder, 'initialized'):
+        encoder.push_initialization_config()
+        encoder.initialize()
+        encoder.bidir.prototype.weights_init = Orthogonal()
+    if not hasattr(decoder, 'initialized'):
+        decoder.push_initialization_config()
+        decoder.transition.weights_init = Orthogonal()
+        decoder.initialize()
+
     if exp_config.get('load_from_saved_parameters', False):
         logger.info("Loading parameters from model: {}".format(exp_config['saved_parameters']))
         param_values = LoadNMT.load_parameter_values(exp_config['saved_parameters'], brick_delimiter=brick_delimiter)
         LoadNMT.set_model_parameters(search_model, param_values)
-        # WORKING: HACKED FOR CONFIDENCE
+        # TODO: CONFIDENCE PREDICTION SHOULD BE OPTIONAL -- RIGHT NOW IT'S HARD-CODED INTO BEAM SEARCH
         if exp_config.get('confidence_saved_parameters', False):
             param_values = LoadNMT.load_parameter_values(exp_config['confidence_saved_parameters'], brick_delimiter=brick_delimiter)
             LoadNMT.set_model_parameters(search_model, param_values)
 
     return beam_search, search_model, samples, sampling_input, sampling_prefix
 
-# TODO: does the predictor need modes? -- prefix prediction vs prediction from scratch
+
 class IMTPredictor:
     """"Uses a trained NMT model to do IMT prediction -- prediction where input includes a prefix"""
 
@@ -483,6 +492,7 @@ class IMTPredictor:
         """
 
         if tokenize:
+            # TODO: tokenizer and detokenizer should be static, don't Popen at each request
             source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
             segment, _ = source_tokenizer.communicate(segment)
             # if there is a prefix, we need to tokenize and preprocess it also

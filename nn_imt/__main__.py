@@ -352,18 +352,16 @@ if __name__ == "__main__":
         #     predictor = IMTPredictor(config_obj)
         # pass
 
-
-
     elif mode == 'server':
 
         import sys
         sys.path.append('.')
-        from server import run_nmt_server
+        from server import run_imt_server
 
         # start restful server and log its port
         predictor = IMTPredictor(config_obj)
 
         # TODO: change to run_imt_server
-        run_nmt_server(predictor)
+        run_imt_server(predictor)
 
 

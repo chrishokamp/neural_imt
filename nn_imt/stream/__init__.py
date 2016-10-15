@@ -145,8 +145,11 @@ class CallPredictionFunctionOnStream:
         predictions = output[0].argmax(axis=-1).T
         tags = (predictions == data[6]).astype('float32')
 
-        # WORKING: return both the merged states, and the tags
-        # WORKING: add softmax score of the chosen tag to the output
+        # add softmax score of the chosen tag to the output
+        # add features for source len, prefix len, position in suffix (position in suffix only makes sense if we're training on predictions)
+        # WORKING: truncate by finding EOS token
+
+
         # import ipdb; ipdb.set_trace()
         # (time, batch, vocab)
         exp_output = numpy.exp(output[0])

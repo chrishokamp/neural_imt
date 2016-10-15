@@ -825,7 +825,6 @@ class NMTPrefixDecoder(Initializable):
                  # Linear(input_dim=state_dim / 2, output_dim=300, use_bias=True, name='confidence_model1').apply,
 
                  # we add one to the state dim because we added the softmax argmax probability as a feature
-                 Bias(dim=state_dim + 1, name='maxout_bias').apply,
                  Linear(input_dim=state_dim + 1, output_dim=300, use_bias=True, name='confidence_model1').apply,
                  Tanh().apply,
                  Linear(input_dim=300, output_dim=100, use_bias=True, name='confidence_model2').apply,
@@ -865,8 +864,6 @@ class NMTPrefixDecoder(Initializable):
 
         # Build sequence generator accordingly
         # TODO: remove the semantic overloading of the `loss_function` kwarg
-        # TODO: BIG TIME HACK HERE
-        # WORKING: add confidence model for IMT
         print("loss function is: {}".format(loss_function))
         if loss_function == 'cross_entropy':
             # Note: it's the PartialSequenceGenerator which lets us condition upon the target prefix
@@ -947,7 +944,6 @@ class NMTPrefixDecoder(Initializable):
 
         return readouts, merged_states
 
-    # WORKING: implement word-level confidence cost
     @application(inputs=['representation', 'source_sentence_mask',
                          'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix', 'readouts', 'prediction_tags'],
                  outputs=['cost'])
@@ -975,7 +971,6 @@ class NMTPrefixDecoder(Initializable):
         return (cost_matrix * target_sentence_mask).sum() / \
                target_sentence_mask.shape[1]
 
-    # WORKING: implement word-level confidence cost
     # WORKING: in this formulation, the "target sentence" is actually assumed to be a prediction output by the model
     # WORKING: a better way would be to output the confidence at each generation step
     @application(inputs=['readouts'],

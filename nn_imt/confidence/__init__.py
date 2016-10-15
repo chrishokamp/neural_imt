@@ -148,12 +148,21 @@ def get_confidence_function(exp_config):
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
 
-    _, merged_states = decoder.prediction_tags(
+    predictions, merged_states = decoder.prediction_tags(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask, target_sentence, target_sentence_mask,
         target_prefix, target_prefix_mask)
 
-    confidence_output = decoder.sequence_generator.confidence_predictions(merged_states)
+    
+    # WORKING: also get the softmax prediction feature
+    # WORKING: add features for source len, prefix len, position in suffix (position in suffix only makes sense if we're training on predictions)
+    p_shape = predictions.shape
+    predictions = predictions.reshape([p_shape[0]*p_shape[1], p_shape[2]])
+    prediction_softmax = tensor.nnet.nnet.softmax(predictions.reshape([p_shape[0]*p_shape[1], p_shape[2]])).reshape(p_shape)
+    prediction_feature = prediction_softmax.max(axis=-1)[:,:,None]
+    all_features = tensor.concatenate([merged_states, prediction_feature], axis=-1)
+
+    confidence_output = decoder.sequence_generator.confidence_predictions(all_features)
 
     logger.info('Creating computational graph')
     confidence_model = Model(confidence_output)
@@ -251,7 +260,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     encoder.initialize()
     decoder.initialize()
 
-    import ipdb;ipdb.set_trace()
     #cost_cg = ComputationGraph(cost)
     if config['l2_reg']:
         l2_reg_alpha = config['l2_reg_alpha']
@@ -268,7 +276,11 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         # this is the probability of dropping out, so you probably want to make it <=0.5
         logger.info('Applying dropout')
         dropout_inputs = [x for x in cg.intermediary_variables
-                          if x.name == 'maxout_apply_output']
+                          if x.name in set(['confidence_model1_apply_output',
+                                            'confidence_model2_apply_output',
+                                            'confidence_model3_apply_output'])]
+                          # if x.name == 'maxout_apply_output']
+        # if x.name == 'maxout_apply_output']
         cg = apply_dropout(cg, dropout_inputs, config['dropout'])
 
     # WORKING: implement confidence -- remove all params except output model
@@ -624,6 +636,7 @@ class ConfidencePredictor:
 	    # TODO: the target suffix should be the model's prediction
 	    target_suffix_mask = numpy.ones(target_suffix.shape, dtype='float32')
 
+        # WORKING: add features for source len, prefix len, position in suffix (position in suffix only makes sense if we're training on predictions)
 	    # call the confidence_output_function
 	    target_word_confidence = self.confidence_output_function(source_mask, source, target_prefix_mask,
 			                                             target_prefix, target_suffix_mask, target_suffix)

@@ -281,6 +281,7 @@ if __name__ == "__main__":
 
 
     # this mode is used to output the confidence model scores for a datastream consisting of (source, prefix, hyp)
+    # build the model and the graph which will get confidence values
     elif mode == 'output-confidence':
         # build the IMT model with a different predictor
         # if we're only predicting confidence about the next word, this model is simpler than MT
@@ -314,43 +315,8 @@ if __name__ == "__main__":
 
         prediction_stream = get_dev_stream_with_prefix_file(**config_obj)
 
-	confidence_predictor = confidence.ConfidencePredictor(config_obj) 
-	confidence_predictor.predict_from_stream(prediction_stream, config_obj['confidence_output_file'])
-
-        # build the model and the graph which will get confidence values
-        # WORKING HERE: output the confidence scores for the data in the prediction stream
-        # WORKING HERE: implement the function above
-
-
-
-# tune on a small set of static samples
-# Validation set source file
-# 'val_set': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_prefixes.generated.sources.1000.samples'
-# Validation set gold file (TODO: this is legacy from MT repo -- not actually needed for static IMT evaluation)
-# 'val_set_grndtruth': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_suffixes.generated.1000.samples'
-# validation prefixes
-# 'val_set_prefixes': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_prefixes.generated.1000.samples'
-# validation suffixes
-# 'val_set_suffixes': '/media/1tb_drive/imt_models/newstest_2013_evaluation/newstest2013_1000_samples/reference_suffixes.generated.1000.samples'
-
-# Print validation output to file
-# 'output_val_set': True
-
-# Validation output file
-# 'val_set_out': !path_join [*OUTPUT_DIR, 'validation_out.txt']
-
-
-        # translate if necessary, write output file, call external evaluation tools and show output
-        # TODO: there is an error here if we don't check that hyps and refs have the same number of lines
-        # translated_output_file = config_obj.get('translated_output_file', None)
-        # if translated_output_file is not None and os.path.isfile(translated_output_file):
-        #     logger.info('{} already exists, so I\'m evaluating the BLEU score of this file with respect to the ' +
-        #                 'reference that you provided: {}'.format(translated_output_file,
-        #                                                          config_obj['test_gold_refs']))
-        #     references_file = config_obj['test_gold_refs']
-        # else:
-        #     predictor = IMTPredictor(config_obj)
-        # pass
+        confidence_predictor = confidence.ConfidencePredictor(config_obj)
+        confidence_predictor.predict_from_stream(prediction_stream, config_obj['confidence_output_file'])
 
     elif mode == 'server':
 
@@ -358,10 +324,10 @@ if __name__ == "__main__":
         sys.path.append('.')
         from server import run_imt_server
 
-        # start restful server and log its port
+        # TODO: change to support multiple predictors in one server instance (pass a list of configs)
         predictor = IMTPredictor(config_obj)
 
-        # TODO: change to run_imt_server
+        # start restful server
         run_imt_server(predictor)
 
 

@@ -106,7 +106,7 @@ def prefix_decode(source_sentence, target_prefix, n_best=1):
 
 
     best_n_hyps, best_n_costs, best_n_glimpses, best_n_word_level_costs, best_n_confidences, src_in = app.predictor.predict_segment(source_sentence, target_prefix=target_prefix,
-                                                        tokenize=True, detokenize=True, n_best=10)
+                                                        tokenize=True, detokenize=True, n_best=5, max_length=app.predictor.max_length)
 
     return best_n_hyps
 

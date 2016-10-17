@@ -279,8 +279,9 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     sampling_representation = encoder.apply(sampling_input, tensor.ones(sampling_input.shape))
 
     # Note: prefix can be empty if we want to simulate baseline NMT
+    n_steps = exp_config.get('n_steps', None)
     generated = decoder.generate(sampling_input, sampling_representation,
-                                 target_prefix=sampling_prefix)
+                                 target_prefix=sampling_prefix, n_steps=n_steps)
 
     # create the 1-step sampling graph
     _, samples = VariableFilter(
@@ -347,6 +348,9 @@ class IMTPredictor:
             self.target_tokenizer_cmd = None
             self.detokenizer_cmd = None
 
+        # the maximum length of predictions -- this can be shortened to make prediction more efficient
+        self.max_length = exp_config.get('n_steps', None)
+
         # this index will get overwritten with the EOS token by _ensure_special_tokens
         # IMPORTANT: the index must be created in the same way it was for training,
         # otherwise the predicted indices will be nonsense
@@ -369,7 +373,7 @@ class IMTPredictor:
         self.unk_idx = self.unk_idx
 
     def map_idx_or_unk(self, sentence, index, unknown_token='<UNK>'):
-        if type(sentence) is str:
+        if type(sentence) is str or type(sentence) is unicode:
             sentence = sentence.split()
         return [index.get(w, unknown_token) for w in sentence]
 
@@ -473,7 +477,7 @@ class IMTPredictor:
 
         return output_file
 
-    def predict_segment(self, segment, target_prefix=None, n_best=1, tokenize=False, detokenize=False):
+    def predict_segment(self, segment, target_prefix=None, n_best=1, tokenize=False, detokenize=False, max_length=None):
         """
         Do prediction for a single segment, which is a list of token idxs
 
@@ -491,28 +495,41 @@ class IMTPredictor:
 
         """
 
-        if tokenize:
-            # TODO: tokenizer and detokenizer should be static, don't Popen at each request
-            source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
-            segment, _ = source_tokenizer.communicate(segment)
-            # if there is a prefix, we need to tokenize and preprocess it also
-            if target_prefix is not None:
-                target_tokenizer = Popen(self.target_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
-                target_prefix, _ = target_tokenizer.communicate(target_prefix)
-
-        segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
+        # TODO: remove hard-coding of BOS tokens here
+        if len(segment) == 0:
+            segment = u'<S>'
+        if len(target_prefix) == 0:
+            target_prefix = u'<S>'
 
         # TODO: sometimes we need to add BOS and EOS tokens to the source, sometimes we don't, how to handle this?
         # if segment[-1] != [self.src_eos_idx]:
         #     segment += [self.src_eos_idx]
 
+        if tokenize:
+            # TODO: tokenizer and detokenizer should be static, don't Popen at each request
+            source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
+            segment, _ = source_tokenizer.communicate(segment.encode('utf-8'))
+            segment = segment.strip().decode('utf-8')
+            # if there is a prefix, we need to tokenize and preprocess it also
+            if target_prefix is not None:
+                target_tokenizer = Popen(self.target_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
+                target_prefix, _ = target_tokenizer.communicate(target_prefix.encode('utf-8'))
+                target_prefix = target_prefix.strip().decode('utf-8')
+
+        segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
+
+
+
         seq = IMTPredictor.sutils._oov_to_unk(
             segment, self.exp_config['src_vocab_size'], self.unk_idx)
         input_ = numpy.tile(seq, (self.exp_config['beam_size'], 1))
 
+        if max_length is None:
+            max_length = 3*len(seq)
+
         # TODO: HANDLE THE CASE WHERE TARGET PREFIX IS EMPTY
         if target_prefix is not None:
-            print('predicting target prefix: {}'.format(target_prefix))
+            logger.info(u'predicting target prefix: {}'.format(target_prefix))
             target_prefix = self.map_idx_or_unk(target_prefix, self.trg_vocab, self.unk_idx)
             prefix_seq = IMTPredictor.sutils._oov_to_unk(
                 target_prefix, self.exp_config['trg_vocab_size'], self.unk_idx)
@@ -523,7 +540,7 @@ class IMTPredictor:
                 self.beam_search.search(
                     input_values={self.source_sampling_input: input_,
                                   self.target_sampling_input: prefix_input_},
-                    max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
+                    max_length=max_length, eol_symbol=self.trg_eos_idx,
                     ignore_first_eol=False)
 
         else:
@@ -531,7 +548,7 @@ class IMTPredictor:
             trans, costs, glimpses, word_level_costs = \
                 self.beam_search.search(
                     input_values={self.sampling_input: input_},
-                    max_length=3*len(seq), eol_symbol=self.trg_eos_idx,
+                    max_length=max_length, eol_symbol=self.trg_eos_idx,
                     ignore_first_eol=False)
 
         # normalize costs according to the sequence lengths

@@ -1000,8 +1000,12 @@ class NMTPrefixDecoder(Initializable):
     # Note the tensor.ones init of the target_prefix_mask is correct in this case
     @application
     def generate(self, source_sentence, representation, **kwargs):
+        # if n_steps isn't in kwargs, max prediction len is 2 * max source sentence len in minibatch
+        if not 'n_steps' in kwargs:
+            kwargs['n_steps'] = 2 * source_sentence.shape[1]
+
+        import ipdb;ipdb.set_trace()
         return self.sequence_generator.generate(
-            n_steps=2 * source_sentence.shape[1],
             batch_size=source_sentence.shape[0],
             attended=representation,
             attended_mask=tensor.ones(source_sentence.shape).T,

@@ -496,10 +496,6 @@ class IMTPredictor:
         """
 
         # TODO: remove hard-coding of BOS tokens here
-        if len(segment) == 0:
-            segment = u'<S>'
-        if len(target_prefix) == 0:
-            target_prefix = u'<S>'
 
         # TODO: sometimes we need to add BOS and EOS tokens to the source, sometimes we don't, how to handle this?
         # if segment[-1] != [self.src_eos_idx]:
@@ -518,7 +514,8 @@ class IMTPredictor:
 
         segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
 
-
+        if len(segment) == 0:
+            segment = [self.src_vocab[u'<S>']]
 
         seq = IMTPredictor.sutils._oov_to_unk(
             segment, self.exp_config['src_vocab_size'], self.unk_idx)
@@ -527,10 +524,11 @@ class IMTPredictor:
         if max_length is None:
             max_length = 3*len(seq)
 
-        # TODO: HANDLE THE CASE WHERE TARGET PREFIX IS EMPTY
         if target_prefix is not None:
             logger.info(u'predicting target prefix: {}'.format(target_prefix))
             target_prefix = self.map_idx_or_unk(target_prefix, self.trg_vocab, self.unk_idx)
+            if len(target_prefix) == 0:
+                target_prefix = [self.trg_vocab[u'<S>']]
             prefix_seq = IMTPredictor.sutils._oov_to_unk(
                 target_prefix, self.exp_config['trg_vocab_size'], self.unk_idx)
 

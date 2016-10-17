@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import threading
 import json
 
@@ -103,12 +104,22 @@ def prefix_decode(source_sentence, target_prefix, n_best=1):
     '''
     # TODO: move tokenization logic to server??
     # TODO: we _must_ add subword configuration as well -- we need to apply subword, then re-concat afterwards
+    # TODO: persistence tokenizer -- don't spin a new process each time
 
 
     best_n_hyps, best_n_costs, best_n_glimpses, best_n_word_level_costs, best_n_confidences, src_in = app.predictor.predict_segment(source_sentence, target_prefix=target_prefix,
                                                         tokenize=True, detokenize=True, n_best=5, max_length=app.predictor.max_length)
 
-    return best_n_hyps
+    # WORKING: remove EOS and normalize subword
+    def _postprocess(hyp):
+        hyp = re.sub("</S>$", "", hyp)
+        hyp = re.sub("\@\@ ", "", hyp)
+        hyp = re.sub("\@\@", "", hyp)
+        return hyp
+
+    postprocessed_hyps = [_postprocess(h) for h in best_n_hyps]
+
+    return postprocessed_hyps
 
 
 def run_imt_server(predictor, port=5000):
@@ -118,5 +129,5 @@ def run_imt_server(predictor, port=5000):
 
     logger.info('Server starting on port: {}'.format(port))
     logger.info('navigate to: http://localhost:{}/neural_MT_demo to see the system demo'.format(port))
-    app.run(debug=True, port=port, host='127.0.0.1')
+    app.run(debug=True, port=port, host='127.0.0.1', threaded=True)
 

@@ -324,10 +324,26 @@ if __name__ == "__main__":
         sys.path.append('.')
         from server import run_imt_server
 
+        predictors = {}
+
         # TODO: change to support multiple predictors in one server instance (pass a list of configs)
-        predictor = IMTPredictor(config_obj)
+        if 'imt_models' in config_obj:
+            # load each config in list of configs, else just load config
+            for config_path in config_obj['imt_models']:
+                model_config = configurations.get_config(config_path)
+                source_lang = model_config['source_lang']
+                target_lang = model_config['target_lang']
+                predictor = IMTPredictor(model_config)
+                predictors[(source_lang, target_lang)] = predictor
+        else:
+            # there's just one predictor, a normal config file
+            source_lang = config_obj['source_lang']
+            target_lang = config_obj['target_lang']
+            predictor = IMTPredictor(config_obj)
+            predictors[(source_lang, target_lang)] = predictor
+
 
         # start restful server
-        run_imt_server(predictor)
+        run_imt_server(predictors)
 
 

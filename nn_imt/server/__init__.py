@@ -18,7 +18,6 @@ app.template_folder = os.path.join(path_to_this_dir, 'templates')
 
 lock = threading.Lock()
 
-
 class NeuralMTDemoForm(Form):
     sentence = TextAreaField('Write the sentence here:',
                              [validators.Length(min=1, max=100000)])
@@ -39,8 +38,10 @@ def neural_mt_demo():
         # TODO: delegate to prefix decoder function here
         source_text = form.sentence.data # Problems in Spanish with 'A~nos. E'
         target_text = form.prefix.data
-        logger.info('Acquired lock')
-        lock.acquire()
+
+        # TODO: is locking actually a good idea?
+        # logger.info('Acquired lock')
+        # lock.acquire()
 
         source_sentence = source_text.encode('utf-8')
         target_prefix = target_text.encode('utf-8')
@@ -56,8 +57,9 @@ def neural_mt_demo():
         form.target_text = output_text.decode('utf-8')
         logger.info('detokenized translations:\n {}'.format(output_text))
 
-        print "Lock release"
-        lock.release()
+        # TODO: is locking actually a good idea?
+        # print "Lock release"
+        # lock.release()
 
     return render_template('neural_MT_demo.html', form=form)
 
@@ -94,8 +96,9 @@ def neural_mt_prefix_decoder():
 
         print "Lock release"
         lock.release()
+        request_time = request_data.get('request_time', 0)
 
-    return jsonify({'ranked_completions': translations})
+    return jsonify({'ranked_completions': translations, 'request_time': request_time})
 
 
 def prefix_decode(source_lang, target_lang, source_sentence, target_prefix, n_best=5):
@@ -134,6 +137,6 @@ def run_imt_server(predictors, port=5000):
 
     logger.info('Server starting on port: {}'.format(port))
     logger.info('navigate to: http://localhost:{}/neural_MT_demo to see the system demo'.format(port))
-    # app.run(debug=True, port=port, host='127.0.0.1', threaded=True)
-    app.run(debug=True, port=port, host='127.0.0.1', threaded=False)
+    app.run(debug=True, port=port, host='127.0.0.1', threaded=True)
+    # app.run(debug=True, port=port, host='127.0.0.1', threaded=False)
 

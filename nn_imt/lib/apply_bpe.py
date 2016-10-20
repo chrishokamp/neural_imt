@@ -38,7 +38,6 @@ class BPE(object):
 
     def segment(self, sentence):
         """segment single sentence (whitespace-tokenized string) with BPE encoding"""
-        import ipdb;ipdb.set_trace()
 
         output = []
         for word in sentence.split():

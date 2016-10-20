@@ -122,7 +122,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
 
         next_confidences = self.confidence_model.apply(next_states[0])
-        import ipdb;ipdb.set_trace()
 
         # WORKING: implement confidence model _after_ prediction (once the next state has been generated)
 
@@ -293,7 +292,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             feedback=feedback, **dict_union(states, glimpses, contexts))
         costs = self.readout.cost(readouts, outputs)
 
-        # WORKING: scale costs by position 
+        # WORKING: scale costs by position
         # TODO: make this optional
         # idea: tile an arange to match the shape of costs, then scale by reciprocal of position
         # idx_range = tensor.arange(1, costs.shape[-1] + 1)
@@ -849,8 +848,6 @@ class NMTPrefixDecoder(Initializable):
         else:
             readout_post_merge = None
 
-        import ipdb; ipdb.set_trace()
-
         # Initialize the readout, note that SoftmaxEmitter emits -1 for
         # initial outputs which is used by LookupFeedBackWMT15
         readout = Readout(
@@ -1004,7 +1001,6 @@ class NMTPrefixDecoder(Initializable):
         if not 'n_steps' in kwargs:
             kwargs['n_steps'] = 2 * source_sentence.shape[1]
 
-        import ipdb;ipdb.set_trace()
         return self.sequence_generator.generate(
             batch_size=source_sentence.shape[0],
             attended=representation,

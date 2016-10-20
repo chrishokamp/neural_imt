@@ -105,14 +105,16 @@ def prefix_decode(source_lang, target_lang, source_sentence, target_prefix, n_be
     :param target_prefix:
     :return: translations
     '''
-    # TODO: move tokenization logic to server??
-    # TODO: persistent tokenizer -- don't spin a new process each time
     predictor = app.predictors[(source_lang, target_lang)]
+    subword = False
+    if predictor.BPE is not None:
+        subword = True
 
     best_n_hyps, best_n_costs, best_n_glimpses, best_n_word_level_costs, best_n_confidences, src_in = predictor.predict_segment(source_sentence, target_prefix=target_prefix,
-                                                        tokenize=True, detokenize=True, n_best=n_best, max_length=predictor.max_length)
+                                                        tokenize=True, detokenize=True, n_best=n_best, max_length=predictor.max_length, subword_encode=subword)
 
     # TODO: we _must_ add subword configuration as well -- we need to apply subword, then re-concat afterwards
+    # TODO: subword is optional -- push this logic to predictor
     # remove EOS and normalize subword
     def _postprocess(hyp):
         hyp = re.sub("</S>$", "", hyp)
@@ -127,14 +129,11 @@ def prefix_decode(source_lang, target_lang, source_sentence, target_prefix, n_be
 
 
 def run_imt_server(predictors, port=5000):
-    import ipdb; ipdb.set_trace()
-    # TODO: a different kind of config for servers -- maps language pairs to NMT configuration files
-    # TODO: server instantiates a predictor for each config, and hashes them by language pair tuples -- i.e. (en,fr)
-    # TODO: make the indexing API visible via the predictor
-    # TODO: NMT passes in a dict of predictors, keys are tuples (source_lang, target_lang)
+    # TODO: persistent subword option in predictors
     app.predictors = predictors
 
     logger.info('Server starting on port: {}'.format(port))
     logger.info('navigate to: http://localhost:{}/neural_MT_demo to see the system demo'.format(port))
-    app.run(debug=True, port=port, host='127.0.0.1', threaded=True)
+    # app.run(debug=True, port=port, host='127.0.0.1', threaded=True)
+    app.run(debug=True, port=port, host='127.0.0.1', threaded=False)
 

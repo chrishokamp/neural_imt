@@ -232,7 +232,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # aux_vars = [v for v in cg.auxiliary_variables[-3:]]
     # import ipdb; ipdb.set_trace()
 
-
     extensions.extend([
         TrainingDataMonitoring([cost], after_batch=True),
         # TrainingDataMonitoring([v for k,v in algorithm.updates[:2]], after_batch=True),
@@ -337,16 +336,29 @@ class IMTPredictor:
         self.source_lang = exp_config.get('source_lang', 'en')
         self.target_lang = exp_config.get('target_lang', 'es')
 
+        # persistent tokenizers and detokenizers
         tokenize_script = exp_config.get('tokenize_script', None)
         detokenize_script = exp_config.get('detokenize_script', None)
         if tokenize_script is not None and detokenize_script is not None:
-            self.source_tokenizer_cmd = [tokenize_script, '-l', self.source_lang, '-q', '-', '-no-escape', '1']
-            self.target_tokenizer_cmd = [tokenize_script, '-l', self.target_lang, '-q', '-', '-no-escape', '1']
-            self.detokenizer_cmd = [detokenize_script, '-l', self.target_lang, '-q', '-']
+            # Note: the '-b' option is _essential_ here, otherwise the tokenizer will hang forever
+            self.source_tokenizer_cmd = [tokenize_script, '-l', self.source_lang, '-q', '-', '-b', '-no-escape', '1']
+            self.target_tokenizer_cmd = [tokenize_script, '-l', self.target_lang, '-q', '-', '-b', '-no-escape', '1']
+            self.detokenizer_cmd = [detokenize_script, '-l', self.target_lang, '-q', '-', '-b']
+
+            self.source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE, bufsize=1)
+            self.target_tokenizer = Popen(self.target_tokenizer_cmd, stdin=PIPE, stdout=PIPE, bufsize=1)
+            self.target_detokenizer = Popen(self.detokenizer_cmd, stdin=PIPE, stdout=PIPE, bufsize=1)
         else:
             self.source_tokenizer_cmd = None
             self.target_tokenizer_cmd = None
             self.detokenizer_cmd = None
+
+        # persistent subword encoding
+        subword_codes = exp_config.get('subword_codes', None)
+        self.BPE = None
+        if subword_codes is not None:
+            from lib.apply_bpe import BPE
+            self.BPE = BPE(codecs.open(subword_codes, encoding='utf8'))
 
         # the maximum length of predictions -- this can be shortened to make prediction more efficient
         self.max_length = exp_config.get('n_steps', None)
@@ -371,6 +383,50 @@ class IMTPredictor:
         self.trg_ivocab = {v: k for k, v in self.trg_vocab.items()}
 
         self.unk_idx = self.unk_idx
+
+    def tokenize(self, text, lang):
+        if lang == 'source':
+            tokenizer = self.source_tokenizer
+        elif lang == 'target':
+            tokenizer = self.target_tokenizer
+        else:
+            raise ValueError('The lang you specified is not one of [source; target] -- you specified: {}'.format(lang))
+        if tokenizer is None:
+            raise NotImplementedError('The {}-tokenizer for this predictor was not initialized'.format(lang))
+
+        tokenizer.stdin.write(text.encode('utf8') + '\n\n')
+        tokenizer.stdin.flush()
+        tokenizer.stdout.flush()
+        segment = tokenizer.stdout.readline()
+        _ = tokenizer.stdout.readline()
+        return segment.rstrip().decode('utf8')
+
+    def detokenize(self, text):
+        if self.target_detokenizer is None:
+            raise NotImplementedError('The {}-tokenizer for this predictor was not initialized'.format(lang))
+
+        # self.target_detokenizer.stdin.write(text.encode('utf8') + '\n\n')
+        self.target_detokenizer.stdin.write(text + '\n\n')
+        self.target_detokenizer.stdin.flush()
+        self.target_detokenizer.stdout.flush()
+        segment = self.target_detokenizer.stdout.readline()
+        _ = self.target_detokenizer.stdout.readline()
+        return segment.strip()
+
+    def subword_encode(self, text):
+        """
+        Note that this method currently assumes that source and target share a BPE index
+        Args:
+            text:
+            lang:
+
+        Returns: subword-encoded text
+
+        """
+        if self.BPE is None:
+            raise NotImplementedError('the BPE encoder was not initialized for this predictor')
+        return self.BPE.segment(text)
+
 
     def map_idx_or_unk(self, sentence, index, unknown_token='<UNK>'):
         if type(sentence) is str or type(sentence) is unicode:
@@ -477,7 +533,8 @@ class IMTPredictor:
 
         return output_file
 
-    def predict_segment(self, segment, target_prefix=None, n_best=1, tokenize=False, detokenize=False, max_length=None):
+    def predict_segment(self, segment, target_prefix=None, n_best=1, tokenize=False, detokenize=False,
+                        max_length=None, subword_encode=False):
         """
         Do prediction for a single segment, which is a list of token idxs
 
@@ -495,25 +552,31 @@ class IMTPredictor:
 
         """
 
-        # TODO: remove hard-coding of BOS tokens here
-
         # TODO: sometimes we need to add BOS and EOS tokens to the source, sometimes we don't, how to handle this?
         # if segment[-1] != [self.src_eos_idx]:
         #     segment += [self.src_eos_idx]
 
         if tokenize:
             # TODO: tokenizer and detokenizer should be static, don't Popen at each request
-            source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
-            segment, _ = source_tokenizer.communicate(segment.encode('utf-8'))
-            segment = segment.strip().decode('utf-8')
+            # source_tokenizer = Popen(self.source_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
+            # segment, _ = source_tokenizer.communicate(segment.encode('utf-8'))
+            # segment = segment.strip().decode('utf-8')
+            segment = self.tokenize(segment, 'source')
             # if there is a prefix, we need to tokenize and preprocess it also
             if target_prefix is not None:
-                target_tokenizer = Popen(self.target_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
-                target_prefix, _ = target_tokenizer.communicate(target_prefix.encode('utf-8'))
-                target_prefix = target_prefix.strip().decode('utf-8')
+                # target_tokenizer = Popen(self.target_tokenizer_cmd, stdin=PIPE, stdout=PIPE)
+                # target_prefix, _ = target_tokenizer.communicate(target_prefix.encode('utf-8'))
+                # target_prefix = target_prefix.strip().decode('utf-8')
+                target_prefix = self.tokenize(target_prefix, 'target')
+
+        if subword_encode:
+            # we currently assume that source and target use the same subword encoding
+            segment = self.subword_encode(segment)
+            target_prefix = self.subword_encode(target_prefix)
 
         segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
 
+        # TODO: remove hard-coding of BOS tokens here
         if len(segment) == 0:
             segment = [self.src_vocab[u'<S>']]
 
@@ -587,10 +650,9 @@ class IMTPredictor:
                 cost = 0.
 
             if detokenize:
-                detokenizer = Popen(self.detokenizer_cmd, stdin=PIPE, stdout=PIPE)
-                trans_out, _ = detokenizer.communicate(trans_out)
-                # strip off the eol symbol
-                trans_out = trans_out.strip()
+                # detokenizer = Popen(self.detokenizer_cmd, stdin=PIPE, stdout=PIPE)
+                # trans_out, _ = detokenizer.communicate(trans_out)
+                trans_out = self.detokenize(trans_out)
 
             logger.info("Source: {}".format(src_in))
             logger.info("Prefix: {}".format(target_prefix))

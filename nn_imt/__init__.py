@@ -42,7 +42,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# WORKING: train IMT with validation using BLEU/METEOR on suffix
 # WORKING: remember to cut the suffix for validation to only one EOS token
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
@@ -60,7 +59,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     target_prefix = tensor.lmatrix('target_prefix')
     target_prefix_mask = tensor.matrix('target_prefix_mask')
-
 
     # Construct model
     logger.info('Building RNN encoder-decoder')
@@ -237,7 +235,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         TrainingDataMonitoring([cost], after_batch=True),
         # TrainingDataMonitoring([v for k,v in algorithm.updates[:2]], after_batch=True),
         # TrainingDataMonitoring(aux_vars, after_batch=True),
-        TrainingDataMonitoring(trainable_params, after_batch=True),
+        # TODO: there is an error in TrainingDataMonitoring because params have the same name
+        # TrainingDataMonitoring(trainable_params, after_batch=True),
         Printing(after_batch=True)]
     )
 

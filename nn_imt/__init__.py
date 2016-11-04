@@ -145,7 +145,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                       every_n_batches=config['save_freq'])
     ]
 
-
     # Set up the sampling graph for validation during training
     # Theano variables for the sampling graph
     sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
@@ -199,7 +198,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # Set up training algorithm
     logger.info("Initializing training algorithm")
 
-    # WORKING: implement confidence model
     # if there is dropout or random noise, we need to use the output of the modified graph
     if config['dropout'] < 1.0 or config['weight_noise_ff'] > 0.0:
        algorithm = GradientDescent(
@@ -216,7 +214,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                                     eval(config['step_rule'])()]),
            on_unused_sources='warn'
        )
-    # END WORKING: implement confidence model
 
 
     # enrich the logged information

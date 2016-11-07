@@ -477,8 +477,8 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
 
         additional_initial_glimpses = []
 
-        # WORKING: always return all initial states, just don't use them in transitions that don't require additional attention
-        # if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
+        # Note: we always return all initial states, just don't use them in transitions that don't require additional attention
+        # Note: this can cause bugs when these states are used to initialize the real transition!
         for attention, attended_name in zip(self.additional_attentions, self.additional_attended_names):
 
             if attended_name in kwargs:
@@ -515,7 +515,10 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
                 return 0
             if name in self.additional_attended_names:
                 attention = self.additional_attentions[self.additional_attended_names.index(name)]
-                return attention.get_dim(attention.take_glimpses.inputs[0])
+                # this is a hack so that AbstractAttention can find the dimension
+                if name.endswith('_0'):
+                    temp_name = name[:-2]
+                return attention.get_dim(temp_name)
             if name in self.flat_additional_glimpse_names:
                 attention_idx = self.flat_additional_glimpse_names.index(name)
                 if attention_idx % 2 == 1:

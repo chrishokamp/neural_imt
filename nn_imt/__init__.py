@@ -62,25 +62,30 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     logger.info('Building RNN encoder-decoder')
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
-    # WORKING: prefix encoder representation should be configurable
-    # WORKING: -- one way to do this is by swapping out the AttentionRecurrent transition using the config
-    prefix_encoder = BidirectionalEncoder(
-        config['trg_vocab_size'], config['enc_embed'], config['enc_nhids'], name='prefixencoder')
+
+    target_prefix_representation = None
+    prefix_encoder = None
+    prefix_attention = False
+    if config.get('prefix_attention', False):
+        logger.info('Creating encoder for prefix attention')
+        prefix_encoder = BidirectionalEncoder(
+            config['trg_vocab_size'], config['enc_embed'], config['enc_nhids'], name='prefixencoder')
+        target_prefix_representation = prefix_encoder.apply(target_prefix, target_prefix_mask)
+        prefix_attention = True
 
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
-        config['enc_nhids'] * 2, loss_function='cross_entropy')
+        config['enc_nhids'] * 2, loss_function='cross_entropy',
+        prefix_attention=prefix_attention)
 
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
 
-    # Note: `target_sentence` should be changed to `target_suffix` for clarity
+    # Note: `target_sentence` could be changed to `target_suffix` for clarity
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
-        #encoder.apply(target_prefix, target_prefix_mask),
         source_sentence_mask,
-        #target_prefix_mask,
-        prefix_encoder.apply(target_prefix, target_prefix_mask),
+        target_prefix_representation,
         target_sentence, target_sentence_mask,
         target_prefix, target_prefix_mask)
 
@@ -95,12 +100,14 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     encoder.push_initialization_config()
     encoder.bidir.prototype.weights_init = Orthogonal()
     encoder.initialize()
-    prefix_encoder.weights_init = decoder.weights_init = IsotropicGaussian(
-        config['weight_scale'])
-    prefix_encoder.biases_init = decoder.biases_init = Constant(0)
-    prefix_encoder.push_initialization_config()
-    prefix_encoder.bidir.prototype.weights_init = Orthogonal()
-    prefix_encoder.initialize()
+
+    if prefix_encoder is not None:
+        prefix_encoder.weights_init = decoder.weights_init = IsotropicGaussian(
+            config['weight_scale'])
+        prefix_encoder.biases_init = decoder.biases_init = Constant(0)
+        prefix_encoder.push_initialization_config()
+        prefix_encoder.bidir.prototype.weights_init = Orthogonal()
+        prefix_encoder.initialize()
 
     decoder.push_initialization_config()
     decoder.transition.weights_init = Orthogonal()
@@ -160,7 +167,9 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Set up the sampling graph for validation during training
     # Theano variables for the sampling graph
-    sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
+    sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder,
+                                                    prefix_attention=prefix_attention,
+                                                    prefix_encoder=prefix_encoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
     # TODO: commented while hacking prefix attention
@@ -265,17 +274,23 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
 
 # TODO: break this function into parts
-def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None):
+def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None, prefix_encoder=None,
+                                    prefix_attention=False):
 
     if encoder is None:
         encoder = BidirectionalEncoder(
             exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
 
+    if prefix_encoder is None and prefix_attention == True:
+        prefix_encoder = BidirectionalEncoder(
+            exp_config['trg_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'], name='prefixencoder')
+
+
     # Note: decoder should be None when we are just doing prediction, not validation
     if decoder is None:
         decoder = NMTPrefixDecoder(
             exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-            exp_config['enc_nhids'] * 2, loss_function='cross_entropy')
+            exp_config['enc_nhids'] * 2, loss_function='cross_entropy', prefix_attention=prefix_attention)
         # rename to match baseline NMT systems so that params can be transparently initialized
         decoder.name = 'decoder'
 
@@ -288,10 +303,16 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     logger.info("Building sampling model")
     sampling_representation = encoder.apply(sampling_input, tensor.ones(sampling_input.shape))
 
+    prefix_representation = None
+    if prefix_attention:
+        prefix_representation = prefix_encoder.apply(sampling_prefix, tensor.ones(sampling_prefix.shape))
+
     # Note: prefix can be empty if we want to simulate baseline NMT
     n_steps = exp_config.get('n_steps', None)
     generated = decoder.generate(sampling_input, sampling_representation,
-                                 target_prefix=sampling_prefix, n_steps=n_steps)
+                                 target_prefix=sampling_prefix,
+                                 prefix_representation=prefix_representation,
+                                 n_steps=n_steps)
 
     # create the 1-step sampling graph
     _, samples = VariableFilter(
@@ -300,8 +321,7 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
 
     # HACK: commented while implementing multiple attention
     # set up beam search
-    # beam_search = BeamSearch(samples=samples)
-    beam_search = None
+    beam_search = BeamSearch(samples=samples)
 
     logger.info("Creating Search Model...")
     search_model = Model(generated)
@@ -338,7 +358,8 @@ class IMTPredictor:
     def __init__(self, exp_config):
 
         theano_variables = load_params_and_get_beam_search(exp_config,
-                                                           brick_delimiter=exp_config.get('brick_delimiter', None))
+                                                           brick_delimiter=exp_config.get('brick_delimiter', None),
+                                                           prefix_attention=exp_config.get('prefix_attention', False))
         # beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
         self.beam_search, search_model, samples, self.source_sampling_input, self.target_sampling_input = theano_variables
 

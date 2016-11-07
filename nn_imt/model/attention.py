@@ -34,6 +34,10 @@ from blocks.bricks.attention import AbstractAttentionRecurrent
 #         child.input_dim = input_dim
 #         child.output_dim = output_dim
 
+# class NamedSequenceContentAttention
+
+
+
 
 
 class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
@@ -131,8 +135,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         for i, attention in enumerate(additional_attentions):
             prefix = 'distribute_fork_{}'.format(i)
             # WORKING: HACK TO MATCH OUTPUT NAMES -- SAME BUG AS 'weighted_averages', 'weights' being the same name for all attention bricks
-            print('attention outputs: {}'.format(attention.take_glimpses.outputs[0] + '_' + str(i)))
-            additional_distribute = Distribute(normal_inputs, attention.take_glimpses.outputs[0] + '_' + str(i), child_prefix=prefix)
+            additional_distribute = Distribute(normal_inputs, attention.take_glimpses.outputs[0] + '_' + str(i), child_prefix=prefix, name='prefix')
             additional_distributes.append(additional_distribute)
 
         self.transition = transition
@@ -162,7 +165,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         additional_attended_names = []
         additional_preprocessed_attended_names = []
         additional_attended_mask_names = []
-        # TODO: will _additional_glimpse_names clash because attention bricks are the same? -- may need to change these output names or parent brick names
+        # note that we need to manually set the names of these variables because of the way attention is implemented
         additional_glimpse_names = []
         for i, attention in enumerate(self.additional_attentions):
             additional_attended_name = 'attended_{}'.format(i)
@@ -170,7 +173,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
             additional_preprocessed_attended_names.append('preprocessed_{}'.format(additional_attended_name))
             additional_attended_mask_name = 'attended_mask_{}'.format(i)
             additional_attended_mask_names.append(additional_attended_mask_name)
-            # WORKING: can we simply change the names?
+            # change the names of the glimpses so that each variable is unique
             additional_glimpse_names.append([n + '_' + str(i) for n in attention.take_glimpses.outputs])
             # add multiple attentions to the contexts
             self._context_names += [additional_attended_name, additional_attended_mask_name]
@@ -180,7 +183,6 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         self.additional_attended_mask_names = additional_attended_mask_names
         self._additional_glimpse_names = additional_glimpse_names
         self.flat_additional_glimpse_names = [n for gs in additional_glimpse_names for n in gs]
-        import ipdb; ipdb.set_trace()
 
         children = [self.transition, self.distribute, self.attention] + self.additional_attentions + self.additional_distributes
         kwargs.setdefault('children', []).extend(children)
@@ -198,7 +200,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         self.distribute.target_dims = self.transition.get_dims(
             self.distribute.target_names)
         for distribute, attention in zip(self.additional_distributes, self.additional_attentions):
-            # WORKING HACK HACK HACK -- attention brick cannot get renamed dim
+            # WORKING HACK HACK HACK -- attention brick cannot currently get renamed dim
             # distribute.source_dim = attention.get_dim(distribute.source_name)
             distribute.source_dim = attention.get_dim(distribute.source_name[:-2])
             distribute.target_dims = self.transition.get_dims(distribute.target_names)
@@ -226,33 +228,42 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         states = dict_subset(kwargs, self._state_names, pop=True)
 
         glimpses = dict_subset(kwargs, self._glimpse_names, pop=True)
+        # Note: previous glimpses are currently never needed in machine translation
         glimpses_needed = dict_subset(glimpses, self.previous_glimpses_needed)
-        # TODO: are glimpses ever needed for current machine translation implementation?
-        # TODO: ipdb to see if we are getting any additional glimpses
 
         # result for the default attention
+        # WORKING: why is 'preprocessed_attended_name' sometimes None in the kwargs?
+        # WORKING: -- where is take_glimses getting called from?
+        default_attended =  kwargs.pop(self.attended_name)
         result = self.attention.take_glimpses(
-            kwargs.pop(self.attended_name),
+            default_attended,
             kwargs.pop(self.preprocessed_attended_name, None),
             kwargs.pop(self.attended_mask_name, None),
             **dict_union(states, glimpses_needed))
 
         additional_results = []
-        for tup in zip(self.additional_attentions,
-                       self.additional_attended_names,
-                       self.additional_preprocessed_attended_names,
-                       self.additional_attended_mask_names):
-            attention, attended_name, preprocessed_attended_name, mask_name = tup
-            additional_result = self.attention.take_glimpses(kwargs.pop(attended_name),
-                                                             kwargs.pop(preprocessed_attended_name),
-                                                             kwargs.pop(mask_name, None),
-                                                             **dict_union(states, glimpses_needed))
-            additional_results.extend(additional_result)
+        # if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
+        if kwargs.get('use_additional_attention', False):
+            for tup in zip(self.additional_attentions,
+                           self.additional_attended_names,
+                           self.additional_preprocessed_attended_names,
+                           self.additional_attended_mask_names):
+
+                attention, attended_name, preprocessed_attended_name, mask_name = tup
+                additional_result = attention.take_glimpses(kwargs.pop(attended_name),
+                                                            kwargs.pop(preprocessed_attended_name, None),
+                                                            kwargs.pop(mask_name, None),
+                                                            **dict_union(states, glimpses_needed))
+                additional_results.extend(additional_result)
+        else:
+            # just add dummy values for everything
+            for _ in self.additional_attentions:
+                additional_results.extend([tensor.zeros(result[0].shape), tensor.zeros(result[1].shape)])
+
 
         # At this point kwargs may contain additional items.
         # e.g. AttentionRecurrent.transition.apply.contexts
         # for each attention, we have [attention_take_glimpses_weighted_averages, attention_take_glimpses_weights]
-        import ipdb; ipdb.set_trace()
         return result + additional_results
 
     @take_glimpses.property('outputs')
@@ -300,27 +311,38 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         if 'initial_states' in kwargs:
             kwargs.pop('initial_states')
 
-        # update with multiple glimpses from multiple attentions
+
+        # if user provided additional attentions, update with multiple glimpses from multiple attentions
         # update sequences for each attention (sum distribute brick output with current sequence representation
-        for distribute, additional_glimpses, attended_name, attended_mask_name in zip(self.additional_distributes,
-                                                                                      self._additional_glimpse_names,
-                                                                                      self.additional_attended_names,
-                                                                                      self.additional_attended_mask_names):
-            print('current kwargs: {}'.format(kwargs))
-            current_glimpses = dict_subset(kwargs, additional_glimpses, pop=True)
-            # Note that we skip the "add_contexts" logic above, and just assume it's true
-            kwargs.pop(attended_name)
-            kwargs.pop(attended_mask_name, None)
-            # apply the current attention
-            # WORKING: bug here
-            sequences.update(distribute.apply(
-                             as_dict=True, **dict_subset(dict_union(sequences, current_glimpses),
-                             distribute.apply.inputs)))
+        # WORKING: how to decide whether or not to apply additional attentions?
+        use_additional_attention = False
+        if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
+            use_additional_attention = True
+            for distribute, additional_glimpses, attended_name, attended_mask_name in zip(self.additional_distributes,
+                                                                                          self._additional_glimpse_names,
+                                                                                          self.additional_attended_names,
+                                                                                          self.additional_attended_mask_names):
+                current_glimpses = dict_subset(kwargs, additional_glimpses, pop=True)
+                # Note that we skip the "add_contexts" logic above, and just assume it's true
+                kwargs.pop(attended_name)
+                kwargs.pop(attended_mask_name, None)
+                # apply the current attention
+                sequences.update(distribute.apply(
+                                 as_dict=True, **dict_subset(dict_union(sequences, current_glimpses),
+                                 distribute.apply.inputs)))
+
 
         # Finally apply the default attention
         sequences.update(self.distribute.apply(
             as_dict=True, **dict_subset(dict_union(sequences, glimpses),
                                         self.distribute.apply.inputs)))
+
+        # WORKING we must pop if necessary -- if the glimpses from the initial state didn't get used
+        if not use_additional_attention:
+            for glimpse_names in self._additional_glimpse_names:
+                for g in glimpse_names:
+                    kwargs.pop(g)
+
         current_states = self.transition.apply(
             iterate=False, as_list=True,
             **dict_union(sequences, kwargs))
@@ -351,7 +373,6 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
             The current step states and glimpses.
 
         """
-        print('Original kwargs: {}'.format(kwargs))
 
         attended = kwargs[self.attended_name]
         preprocessed_attended = kwargs.pop(self.preprocessed_attended_name)
@@ -362,24 +383,31 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         states = dict_subset(kwargs, self._state_names, pop=True)
         glimpses = dict_subset(kwargs, self._glimpse_names, pop=True)
 
-        additional_attended = {name: kwargs[name] for name in self.additional_attended_names}
-        preprocessed_additional_attended = {name: kwargs.pop(name) for name in self.additional_preprocessed_attended_names}
-        additional_attended_mask = {name: kwargs.get(name) for name in self.additional_attended_mask_names}
-        additional_attentions = dict_union(additional_attended, preprocessed_additional_attended, additional_attended_mask)
+        # WORKING: the use of additional attentions must be optional for each apply call
+        additional_attentions = {}
+        additional_glimpses = {}
+        use_additional_attention = False
+        if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
+            additional_attended = {name: kwargs[name] for name in self.additional_attended_names}
+            preprocessed_additional_attended = {name: kwargs.pop(name) for name in self.additional_preprocessed_attended_names}
+            additional_attended_mask = {name: kwargs.get(name) for name in self.additional_attended_mask_names}
+	    # put all of the dicts together
+            additional_attentions = dict_union(additional_attended, preprocessed_additional_attended, additional_attended_mask)
+            use_additional_attention = True
 
-        # WORKING: weighted_averages and weights need to have different names for each attention block
+        # Note: weighted_averages and weights need to have different names for each attention block
+        # WORKING: we always pop here, because they're in the initial states
         try:
             additional_glimpses = dict_union(*[dict_subset(kwargs, glimpse_names, pop=True)
-                                           for glimpse_names in self._additional_glimpse_names])
-            import ipdb; ipdb.set_trace()
+                                             for glimpse_names in self._additional_glimpse_names])
         except:
             import ipdb; ipdb.set_trace()
 
         # WORKING: make sure multiple glimpses from take_glimpses are handled at prediction time as well
-        # WORKING: every attended_name, attended_mask_name, and preprocessed_attended_name needs to be available in the kwargs
         # WORKING HERE
         current_glimpses = self.take_glimpses(
             as_dict=True,
+            use_additional_attention=use_additional_attention,
             **dict_union(
                 states, glimpses, additional_glimpses,
                 {self.attended_name: attended,
@@ -388,11 +416,9 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
                 additional_attentions
             )
         )
-        import ipdb; ipdb.set_trace()
         current_states = self.compute_states(
             as_list=True,
             **dict_union(sequences, states, current_glimpses, kwargs))
-        import ipdb; ipdb.set_trace()
         return current_states + list(current_glimpses.values())
 
     @do_apply.property('sequences')
@@ -403,6 +429,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
     def do_apply_contexts(self):
         return self._context_names + [self.preprocessed_attended_name] + self.additional_preprocessed_attended_names
 
+    # NOTE that we don't actually use the glimpses as states in current machine translation
     @do_apply.property('states')
     def do_apply_states(self):
         return self._state_names + self._glimpse_names + self.flat_additional_glimpse_names
@@ -419,14 +446,14 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         :meth:`do_apply` documentation for further information.
 
         """
-        preprocessed_attended = self.attention.preprocess(
-            kwargs[self.attended_name])
+        preprocessed_attended = self.attention.preprocess(kwargs[self.attended_name])
         additional_preprocessed_attended = {}
-        #import ipdb; ipdb.set_trace()
-        for attention, attended_name, preprocessed_attended_name in zip(self.additional_attentions,
-                                                                        self.additional_attended_names,
-                                                                        self.additional_preprocessed_attended_names):
-            additional_preprocessed_attended[preprocessed_attended_name] = attention.preprocess(kwargs[attended_name])
+
+        if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
+            for attention, attended_name, preprocessed_attended_name in zip(self.additional_attentions,
+                                                                            self.additional_attended_names,
+                                                                            self.additional_preprocessed_attended_names):
+                additional_preprocessed_attended[preprocessed_attended_name] = attention.preprocess(kwargs[attended_name])
 
         return self.do_apply(**dict_union(kwargs,
                                           {self.preprocessed_attended_name: preprocessed_attended},
@@ -442,20 +469,28 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
     def apply_contexts(self):
         return self._context_names
 
-    # WORKING: this method is currently overridden in initial state attention recurrent
-    # WORKING: this is overridden on
+    # Note: this method is currently overridden in initial state attention recurrent
     @application
     def initial_states(self, batch_size, **kwargs):
+
+        initial_glimpses = self.attention.initial_glimpses(batch_size, kwargs[self.attended_name])
+
         additional_initial_glimpses = []
+
+        # WORKING: always return all initial states, just don't use them in transitions that don't require additional attention
+        # if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
         for attention, attended_name in zip(self.additional_attentions, self.additional_attended_names):
-            initial_glimpses = attention.initial_glimpses(batch_size, kwargs[attended_name])
-            additional_initial_glimpses.extend(pack(initial_glimpses))
+
+            if attended_name in kwargs:
+                initial_glimpses = attention.initial_glimpses(batch_size, kwargs[attended_name])
+                additional_initial_glimpses.extend(pack(initial_glimpses))
+            else:
+                # Note: the dimensions still need to be the same as the dummy outputs from `take_glimpses`
+                additional_initial_glimpses.extend(self.attention.initial_glimpses(batch_size, kwargs[self.attended_name]))
 
         initial_states = (pack(self.transition.initial_states(batch_size, **kwargs)) +
-                          pack(self.attention.initial_glimpses(batch_size, kwargs[self.attended_name])) +
+                          pack(initial_glimpses) +
                           pack(additional_initial_glimpses))
-
-        import ipdb; ipdb.set_trace()
 
         return initial_states
 
@@ -467,7 +502,6 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
     def get_dim(self, name):
         # WORKING: do 'weighted_averages' and 'weights' get duplicated for every attention brick? -- yes, this breaks
         # if name in self.flat_additional_glimpse_names:
-        print('get dim: {}'.format(name))
         if name in self._glimpse_names:
             return self.attention.get_dim(name)
         if name == self.preprocessed_attended_name:

@@ -31,8 +31,9 @@ from attention import MultipleAttentionRecurrent
 
 from picklable_itertools.extras import equizip
 
-# theano.config.optimizer = 'None'
-# theano.config.traceback.limit = 20
+theano.config.optimizer = 'None'
+theano.config.traceback.limit = 20
+#theano.config.exception_verbosity = 'high'
 
 class NDimensionalLogistic(Logistic):
     decorators = [WithExtraDims()]
@@ -133,7 +134,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
 
         next_confidences = self.confidence_model.apply(next_states[0])
-        import ipdb;ipdb.set_trace()
 
         return (next_states + [next_outputs] +
                 list(next_glimpses.values()) + [next_costs] + [next_probs] + [next_confidences])
@@ -159,7 +159,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             return self.readout.get_dim(name)
         return super(BaseSequenceGenerator, self).get_dim(name)
 
-    # Note: this function is only used by self.generate, because it has the recurrent decorator
+    # Note: this function is only used by self.generate, because that function has the recurrent decorator
     # Note: it's not used in the cost computation
     @application
     def initial_states(self, batch_size, *args, **kwargs):
@@ -218,8 +218,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                 'weights': glimpses['weights'][-1],
                 # WORKING: COMPLETE HACK HERE -- WRONG -- the initial states must be computed or initialized from scratch for the new attention!!!!!
                 # WORKING: can delegate to the initial state of the Attention block when we're not doing prefix initialization as above
-                'weighted_averages': glimpses['weighted_averages'][-1],
-                'weights': glimpses['weights'][-1]
+                'weighted_averages_0': glimpses['weighted_averages'][-1],
+                'weights_0': glimpses['weights'][-1]
             }
 
         else:
@@ -234,7 +234,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
     @initial_states.property('outputs')
     def initial_states_outputs(self):
-        import ipdb; ipdb.set_trace()
         return self.generate.states
 
     # WORKING: compute the states of the prefix so that we can put attention over them
@@ -275,8 +274,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return results
 
-
-
         # TODO: add the target prefix as context -- will this speed up training?
         # @property
         # def _context_names(self):
@@ -309,16 +306,22 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         # masks in context are optional (e.g. `attended_mask`)
         contexts = dict_subset(kwargs, self._context_names, must_have=False)
-        import ipdb; ipdb.set_trace()
 
-        prefix_results = self.compute_states(prefix_outputs, mask=prefix_mask, **kwargs)
-        import ipdb; ipdb.set_trace()
+        # NOTE: we currently need to know beforehand which contexts are needed for the prefix transition, and which are needed for the decoder transition
+        prefix_context_names = ['attended', 'attended_mask']
+        prefix_contexts = dict_subset(contexts, prefix_context_names, must_have=True)
 
-        # TODO: does this make sense for the initial glimpses? these are the glimpses we used
-        # TODO: to compute the last word of the prefix
+        prefix_results = self.compute_states(prefix_outputs, mask=prefix_mask, **dict_union(states, prefix_contexts))
+
         prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
 
         # WORKING: we need the initial glimpses for every attention brick
+        # WORKING: we can only init the initial glimpses for the prefix from the previous transition,
+        # WORKING: the initial glimpses for the additional attentions must be initialized from scratch (or use the prefix initial glimpse?)
+        # WORKING: remember that the previous glimpses aren't actually used in our model anyway
+        # TODO: does this make sense for the initial glimpses? these are the glimpses we used
+        # TODO: to compute the last word of the prefix
+        # TODO: We can only get the initial glimpses for the original attention, not for all attentions
         prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
 
         # Now compute the suffix representation, and use the prefix initial states to init the recurrent transition
@@ -328,6 +331,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # Run the recurrent network
         # WORKING: create a second transition which includes attention over the prefix states
         # WORKING: this transition can only be trained ("tuned" for IMT) -- baseline is the transition without multiple attentions
+        # WORKING: (some of) the pre-trained parameters can optionally be held static
         # WORKING: we have the prefix states from the first application of the recurrent transition (see the initial state extraction above)
         results = self.transition.apply(
             mask=mask, return_initial_states=True, as_dict=True,
@@ -830,11 +834,23 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
             # WORKING: (2) the second pass which uses the prefix to initialize, and additionally has attention over the prefix
             transition_initial_states = kwargs.pop('initial_states')
             attention_initial_glimpses = kwargs.pop('initial_glimpses')
-            initial_states = (pack(transition_initial_states) + pack(attention_initial_glimpses))
+            # HACK -- we have to cut off the last two, because those were dummies from the first time we ran the transition
+            attention_initial_glimpses = attention_initial_glimpses[:2]
+
+            additional_attention_initial_glimpses = []
+            for additional_attention, additional_attended_name in zip(self.additional_attentions,
+                                                                      self.additional_attended_names):
+
+                # Note the name shortening hack because of the hardcoded name on the Attention brick `get_dim`
+                more_initial_glimpses = additional_attention.initial_glimpses(batch_size, kwargs[additional_attended_name])
+                additional_attention_initial_glimpses.extend(pack(more_initial_glimpses))
+            # WORKING: get the additional initial glimpses from the additional attention brick
+            initial_states = (pack(transition_initial_states) + pack(attention_initial_glimpses) +
+                              pack(additional_attention_initial_glimpses))
         else:
-            # initial_states = (pack(self.transition.initial_states(batch_size, **kwargs)) +
-            #                   pack(self.attention.initial_glimpses(batch_size, kwargs[self.attended_name])))
             initial_states = super(InitialStateAttentionRecurrent, self).initial_states(batch_size, **kwargs)
+
+        # WORKING: when special initial states aren't available, and we're not using the additional attention, we need to return dummy initial states
 
         return initial_states
 
@@ -883,6 +899,8 @@ class NMTPrefixDecoder(Initializable):
         # WORKING: attentions go in a list, but the first one falls back to NIMT default behavior
         # Initialize the attention mechanism
         # WORKING: HACK here -- 2x source attention just to check
+        # WORKING: the prefix attention is only used in the _second_ recurrent transition of the decoder
+        # WORKING: this means that additional attentions need to be optional each time transition.apply is called
         prefix_attention = True
         if prefix_attention:
             self.attention = []
@@ -893,7 +911,7 @@ class NMTPrefixDecoder(Initializable):
             self.attention.append(SequenceContentAttention(
                 state_names=self.transition.apply.states,
                 attended_dim=representation_dim,
-                match_dim=state_dim, name="dummy_source_attention"))
+                match_dim=state_dim, name="prefix_attention"))
         else:
             self.attention = SequenceContentAttention(
                 state_names=self.transition.apply.states,
@@ -939,8 +957,15 @@ class NMTPrefixDecoder(Initializable):
 
         # Chris: it's key that we're taking the first output of self.attention.take_glimpses.outputs
         # Chris: the first output is the weighted avgs, the second is the weights in (batch, time)
+        # WORKING: SAME BUG WITH attention output names
         if type(self.attention) is list:
-            attention_sources = [attention.take_glimpses.outputs[0] for attention in self.attention]
+            #attention_sources = [attention.take_glimpses.outputs[0] for attention in self.attention]
+            # HACKED
+            attention_sources = []
+            attention_sources.append(self.attention[0].take_glimpses.outputs[0])
+            # WORKING: dimension mismatch error??
+            #attention_sources.append(self.attention[1].take_glimpses.outputs[0] + '_0')
+
         else:
             attention_sources = [self.attention.take_glimpses.outputs[0]]
         readout = Readout(
@@ -954,8 +979,9 @@ class NMTPrefixDecoder(Initializable):
         # Build sequence generator accordingly
         # TODO: remove the semantic overloading of the `loss_function` kwarg
         # WORKING: attentions kwarg accepts a list of things to compute attention over, the first thing in that list
-        # maintains the default behavior
-        # WORKING: dual attention over source as dummy
+        # WORKING: maintains the default behavior
+        # WORKING: bidir recurrent over target_prefix, or attention over the pre-computed target prefix states?
+        # WORKING: intuitively, we want to make sure _not_ to translate things that are already in the target prefix
         print("loss function is: {}".format(loss_function))
         if loss_function == 'cross_entropy':
             # Note: it's the PartialSequenceGenerator which lets us condition upon the target prefix
@@ -986,15 +1012,18 @@ class NMTPrefixDecoder(Initializable):
 
         self.children = [self.sequence_generator]
 
-    @application(inputs=['representation', 'source_sentence_mask',
-                         'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
-                 outputs=['cost'])
-    def cost(self, representation, source_sentence_mask,
+    #@application(inputs=['representation', 'prefix_representation', 'source_sentence_mask',
+    #                     'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
+    #             outputs=['cost'])
+    @application(outputs=['cost'])
+    def cost(self, rep, source_sentence_mask, prefix_representation,
              target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
 
         source_sentence_mask = source_sentence_mask.T
+
         target_sentence = target_sentence.T
         target_sentence_mask = target_sentence_mask.T
+
         target_prefix = target_prefix.T
         target_prefix_mask = target_prefix_mask.T
 
@@ -1006,11 +1035,16 @@ class NMTPrefixDecoder(Initializable):
             'outputs': target_sentence,
             'prefix_mask': target_prefix_mask,
             'prefix_outputs': target_prefix,
-            'attended': representation,
+            'attended': rep,
             'attended_mask': source_sentence_mask,
             # WORKING: hacked here until we support arbitrary attentions
-            'attended_0': representation,
-            'attended_mask_0': source_sentence_mask,
+            # WORKING: how can we do this with the target prefix as well -- we need to compute its states _first_
+            # WORKING: set this kwarg inside the cost_matrix
+            # WORKING: attended and attended 0 are optional to keep default behavior
+            'attended_0': prefix_representation,
+            #'attended_0': rep,
+            'attended_mask_0': target_prefix_mask
+            #'attended_mask_0': source_sentence_mask,
         }
                                                    )
         return (cost * target_sentence_mask).sum() / \
@@ -1099,11 +1133,15 @@ class NMTPrefixDecoder(Initializable):
         if kwargs.get('n_steps', None) is None:
             kwargs['n_steps'] = 2 * source_sentence.shape[1]
 
-        import ipdb;ipdb.set_trace()
+        # WORKING: another dependency between the kwargs for attention -- probably the way to handle this is by passing a list of (attention, mask) pairs
         return self.sequence_generator.generate(
             batch_size=source_sentence.shape[0],
             attended=representation,
             attended_mask=tensor.ones(source_sentence.shape).T,
+            # WORKING: HACKED, attention names are hard-coded
+            # WORKING: how can we do this with the target prefix as well -- we need to compute its states _first_
+            attended_0=representation,
+            attended_mask_0=tensor.ones(source_sentence.shape).T,
             **kwargs)
 
 

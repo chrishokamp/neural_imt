@@ -54,8 +54,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # for IMT training, we use only the suffix as the reference
     target_sentence = tensor.lmatrix('target_suffix')
     target_sentence_mask = tensor.matrix('target_suffix_mask')
-    # TODO: change names back to *_suffix, there is currently a theano function name error
-    # TODO: in the GradientDescent Algorithm
 
     target_prefix = tensor.lmatrix('target_prefix')
     target_prefix_mask = tensor.matrix('target_prefix_mask')
@@ -64,6 +62,10 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     logger.info('Building RNN encoder-decoder')
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
+    # WORKING: prefix encoder representation should be configurable
+    # WORKING: -- one way to do this is by swapping out the AttentionRecurrent transition using the config
+    prefix_encoder = BidirectionalEncoder(
+        config['trg_vocab_size'], config['enc_embed'], config['enc_nhids'], name='prefixencoder')
 
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
@@ -72,10 +74,14 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
 
-    # TODO: change the name of `target_sentence` to `target_suffix` for more clarity
+    # Note: `target_sentence` should be changed to `target_suffix` for clarity
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
-        source_sentence_mask, target_sentence, target_sentence_mask,
+        #encoder.apply(target_prefix, target_prefix_mask),
+        source_sentence_mask,
+        #target_prefix_mask,
+        prefix_encoder.apply(target_prefix, target_prefix_mask),
+        target_sentence, target_sentence_mask,
         target_prefix, target_prefix_mask)
 
     logger.info('Creating computational graph')
@@ -87,10 +93,17 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         config['weight_scale'])
     encoder.biases_init = decoder.biases_init = Constant(0)
     encoder.push_initialization_config()
-    decoder.push_initialization_config()
     encoder.bidir.prototype.weights_init = Orthogonal()
-    decoder.transition.weights_init = Orthogonal()
     encoder.initialize()
+    prefix_encoder.weights_init = decoder.weights_init = IsotropicGaussian(
+        config['weight_scale'])
+    prefix_encoder.biases_init = decoder.biases_init = Constant(0)
+    prefix_encoder.push_initialization_config()
+    prefix_encoder.bidir.prototype.weights_init = Orthogonal()
+    prefix_encoder.initialize()
+
+    decoder.push_initialization_config()
+    decoder.transition.weights_init = Orthogonal()
     decoder.initialize()
 
     # apply dropout for regularization
@@ -150,40 +163,41 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
-    if config['hook_samples'] >= 1:
-        logger.info("Building sampler")
-        extensions.append(
-            Sampler(model=search_model, data_stream=tr_stream,
-                    hook_samples=config['hook_samples'],
-                    every_n_batches=config['sampling_freq'],
-                    src_vocab=source_vocab,
-                    trg_vocab=target_vocab,
-                    src_vocab_size=config['src_vocab_size']))
+    # TODO: commented while hacking prefix attention
+    # if config['hook_samples'] >= 1:
+    #     logger.info("Building sampler")
+    #     extensions.append(
+    #         Sampler(model=search_model, data_stream=tr_stream,
+    #                 hook_samples=config['hook_samples'],
+    #                 every_n_batches=config['sampling_freq'],
+    #                 src_vocab=source_vocab,
+    #                 trg_vocab=target_vocab,
+    #                 src_vocab_size=config['src_vocab_size']))
 
     # Add early stopping based on bleu
-    if config['bleu_script'] is not None:
-        logger.info("Building bleu validator")
-        extensions.append(
-            BleuValidator(sampling_input, sampling_prefix, samples=samples, config=config,
-                          model=search_model, data_stream=dev_stream,
-                          src_vocab=source_vocab,
-                          trg_vocab=target_vocab,
-                          normalize=config['normalized_bleu'],
-                          every_n_batches=config['bleu_val_freq']))
+    # if config['bleu_script'] is not None:
+    #     logger.info("Building bleu validator")
+    #     extensions.append(
+    #         BleuValidator(sampling_input, sampling_prefix, samples=samples, config=config,
+    #                       model=search_model, data_stream=dev_stream,
+    #                       src_vocab=source_vocab,
+    #                       trg_vocab=target_vocab,
+    #                       normalize=config['normalized_bleu'],
+    #                       every_n_batches=config['bleu_val_freq']))
 
     # TODO: add first-word accuracy validation
     # TODO: add IMT meteor early stopping
-    if config.get('imt_f1_validation', None) is not None:
-        logger.info("Building imt F1 validator")
-        extensions.append(
-            IMT_F1_Validator(sampling_input, sampling_prefix,
-                             samples=samples,
-                             config=config,
-                             model=search_model, data_stream=dev_stream,
-                             src_vocab=source_vocab,
-                             trg_vocab=target_vocab,
-                             normalize=config['normalized_bleu'],
-                             every_n_batches=config['bleu_val_freq']))
+    # if config.get('imt_f1_validation', None) is not None:
+    #     logger.info("Building imt F1 validator")
+    #     extensions.append(
+    #         IMT_F1_Validator(sampling_input, sampling_prefix,
+    #                          samples=samples,
+    #                          config=config,
+    #                          model=search_model, data_stream=dev_stream,
+    #                          src_vocab=source_vocab,
+    #                          trg_vocab=target_vocab,
+    #                          normalize=config['normalized_bleu'],
+    #                          every_n_batches=config['bleu_val_freq']))
 
     # Reload model if necessary
     if config['reload']:
@@ -284,8 +298,10 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
         bricks=[decoder.sequence_generator], name="outputs")(
         ComputationGraph(generated[1]))  # generated[1] is next_outputs
 
+    # HACK: commented while implementing multiple attention
     # set up beam search
-    beam_search = BeamSearch(samples=samples)
+    # beam_search = BeamSearch(samples=samples)
+    beam_search = None
 
     logger.info("Creating Search Model...")
     search_model = Model(generated)

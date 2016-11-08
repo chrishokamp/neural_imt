@@ -32,6 +32,7 @@ from nn_imt.model import NMTPrefixDecoder
 from nn_imt.stream import map_pair_to_imt_triples, get_dev_stream_with_prefixes
 from nn_imt.evaluation import imt_f1
 from nn_imt.search import BeamSearch
+from nn_imt.checkpoint import IMTRunExternalValidation
 
 try:
     from blocks_extras.extensions.plot import Plot
@@ -208,6 +209,11 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     #                          normalize=config['normalized_bleu'],
     #                          every_n_batches=config['bleu_val_freq']))
 
+    # non-blocking external validation
+    extensions.append(
+        IMTRunExternalValidation(config=config, every_n_batches=config['bleu_val_freq'])
+    )
+
     # Reload model if necessary
     if config['reload']:
         extensions.append(LoadNMT(config['saveto']))
@@ -333,6 +339,10 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
         encoder.push_initialization_config()
         encoder.initialize()
         encoder.bidir.prototype.weights_init = Orthogonal()
+    if prefix_encoder is not None and not hasattr(prefix_encoder, 'initialized'):
+        prefix_encoder.push_initialization_config()
+        prefix_encoder.initialize()
+        prefix_encoder.bidir.prototype.weights_init = Orthogonal()
     if not hasattr(decoder, 'initialized'):
         decoder.push_initialization_config()
         decoder.transition.weights_init = Orthogonal()

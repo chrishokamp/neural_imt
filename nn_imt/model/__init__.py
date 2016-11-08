@@ -1054,14 +1054,6 @@ class NMTPrefixDecoder(Initializable):
             additional_attentions)
         )
 
-        # WORKING: hacked here until we support arbitrary attentions
-        # WORKING: how can we do this with the target prefix as well -- we need to compute its states _first_
-        # WORKING: set this kwarg inside the cost_matrix
-        # WORKING: attended and attended 0 are optional to keep default behavior
-        # 'attended_0': prefix_representation,
-                      #'attended_0': rep,
-                      # 'attended_mask_0': target_prefix_mask
-        #'attended_mask_0': source_sentence_mask,
         return (cost * target_sentence_mask).sum() / \
                target_sentence_mask.shape[1]
 

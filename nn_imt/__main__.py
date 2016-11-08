@@ -54,6 +54,7 @@ if __name__ == "__main__":
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
 
         # TODO: support both modes of creating validation data -- look at the config file to see which one to use
+        # WORKING: always use asynchronous validation
         dev_stream = get_dev_stream_with_prefix_file(**config_obj)
         #dev_stream = get_dev_stream_with_prefixes(**config_obj)
 
@@ -142,6 +143,14 @@ if __name__ == "__main__":
     elif mode == 'evaluate':
         logger.info("Started Evaluation: ")
         val_start_time = time.time()
+        model_name = config_obj.get('model_name', 'default_model')
+        evaluation_report_path = os.path.join(config_obj['saveto'], 'evaluation_reports')
+
+        # load existing evaluation info if this model has already been evaluated
+        if not os.path.isdir(evaluation_report_path):
+            os.makedirs(evaluation_report_path)
+
+        evaluation_report = []
 
         # create the control function which will run evaluation
         # currently available evaluation metrics: 'bleu', 'meteor', 'imt_f1', 'imt_ndcg'
@@ -180,8 +189,6 @@ if __name__ == "__main__":
                 sources_file, prediction_prefixes, references_file = split_refs_into_prefix_suffix_files(prediction_refs,
                                                                                                          config_obj,
                                                                                                          n_best=n_best_rank)
-
-                import ipdb; ipdb.set_trace()
             else:
                 sources_file = config_obj['test_set']
                 references_file = config_obj['test_gold_refs']
@@ -229,21 +236,25 @@ if __name__ == "__main__":
             bleu_score = float(out_parse.group()[6:])
             logger.info('BLEU SCORE: {}'.format(bleu_score))
             mb_subprocess.terminate()
+            evaluation_report.append(u'{} {} {}'.format('bleu', bleu_score, model_name))
 
         if 'imt_f1' in evaluation_metrics:
             translated_output_file = config_obj.get('translated_output_file', None)
             imt_f1_score, precision, recall = imt_f1_from_files(translated_output_file, references_file)
             logger.info('IMT F1 SCORE: {}, precision: {}, recall: {}'.format(imt_f1_score, precision, recall))
+            evaluation_report.append(u'{} {} {}'.format('imt_f1', imt_f1_score, model_name))
 
         if 'wpa' in evaluation_metrics:
             translated_output_file = config_obj.get('translated_output_file', None)
             wpa_score = wpa_from_files(translated_output_file, references_file)
             logger.info('WPA SCORE: {}'.format(wpa_score))
+            evaluation_report.append(u'{} {} {}'.format('wpa', wpa_score, model_name))
 
         if 'num_prd' in evaluation_metrics:
             translated_output_file = config_obj.get('translated_output_file', None)
             num_prd_score = num_prd_from_files(translated_output_file, references_file)
             logger.info('#PRD SCORE: {}'.format(num_prd_score))
+            evaluation_report.append(u'{} {} {}'.format('num_prd', num_prd_score, model_name))
 
         if 'meteor' in evaluation_metrics:
             meteor_directory = config_obj.get('meteor_directory', None)
@@ -257,6 +268,7 @@ if __name__ == "__main__":
             meteor_output = check_output(meteor_cmd)
             meteor_score = float(meteor_output.strip().split('\n')[-1].split()[-1])
             logger.info('METEOR SCORE: {}'.format(meteor_score))
+            evaluation_report.append(u'{} {} {}'.format('meteor', meteor_score, model_name))
 
         if 'imt_ndcg' in evaluation_metrics:
             # Note: this metric requires an nbest list with rank > 1
@@ -266,6 +278,12 @@ if __name__ == "__main__":
             translated_output_file = config_obj.get('translated_output_file', None)
             imt_ndcg_score = imt_ndcg_from_files(translated_output_file, references_file)
             logger.info('IMT_NDCG SCORE: {}'.format(imt_ndcg_score))
+            evaluation_report.append(u'{} {} {}'.format('imt_ndcg', imt_ndcg_score, model_name))
+
+        # touch a file for each row in evaluation_report, the file name is the result
+        for l in evaluation_report:
+            open(os.path.join(evaluation_report_path, l), 'w').close()
+        logger.info('Wrote evaluation report files to: {}'.format(evaluation_report_path))
 
     # train a model of next-word confidence: how sure am I that the next word is correct, given what came before?
     elif mode == 'confidence':

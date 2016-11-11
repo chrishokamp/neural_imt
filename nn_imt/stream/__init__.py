@@ -75,8 +75,14 @@ class PrefixSuffixStreamTransformer:
 
     def __init__(self, **kwargs):
         self.sample_ratio = kwargs.get('sample_ratio', 1.)
-        # WORKING: add the ability to always generate the same samples by resetting the seed
+        # TODO: add the ability to always generate the same samples by resetting the seed
         assert self.sample_ratio > 0. and self.sample_ratio <= 1., '0. < sample_ratio <= 1.'
+
+        # WORKING: only sample suffixes above a certain length
+        # WORKING: there will be cases where
+        self.min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None)
+        if self.min_suffix_source_ratio is not None:
+            assert self.min_suffix_source_ratio > 0. and self.min_suffix_source_ratio <= 1., '0. < min_suffix_source_ratio <= 1.'
 
         self.random_seed = kwargs.get('random_seed', 42)
         self.random_state = numpy.random.RandomState(self.random_seed)
@@ -95,6 +101,16 @@ class PrefixSuffixStreamTransformer:
                                                                                  bos_token=True,
                                                                                  eos_token=True,
                                                                                  **kwargs))
+
+        if self.min_suffix_source_ratio is not None:
+            source_len = float(len(sources[0]))
+            good_idxs = [idx for idx, seq in enumerate(target_suffixes)
+                         if (float(len(seq)) / source_len) >= self.min_suffix_source_ratio]
+
+            sources = [sources[idx] for idx in good_idxs]
+            target_prefixes = [target_prefixes[idx] for idx in good_idxs]
+            target_suffixes = [target_suffixes[idx] for idx in good_idxs]
+
 
         if self.sample_ratio < 1.:
             num_samples = int(numpy.ceil(self.sample_ratio * len(target_prefixes)))
@@ -149,8 +165,6 @@ class CallPredictionFunctionOnStream:
         # add features for source len, prefix len, position in suffix (position in suffix only makes sense if we're training on predictions)
         # WORKING: truncate by finding EOS token
 
-
-        # import ipdb; ipdb.set_trace()
         # (time, batch, vocab)
         exp_output = numpy.exp(output[0])
         softmax_probs = exp_output / numpy.repeat(numpy.sum(exp_output, axis=-1)[:,:,None], exp_output.shape[-1], axis=-1)
@@ -327,7 +341,10 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
                                  trg_vocab_size=trg_vocab_size,
                                  unk_id=unk_id))
 
-    stream = Mapping(stream, PrefixSuffixStreamTransformer(sample_ratio=kwargs.get('train_sample_ratio', 1.)),
+    stream = Mapping(stream,
+                     PrefixSuffixStreamTransformer(
+                         sample_ratio=kwargs.get('train_sample_ratio', 1.),
+                         min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None)),
                      add_sources=('target_prefix', 'target_suffix'))
 
     stream = Mapping(stream, CopySourceAndTargetToMatchPrefixes(stream))

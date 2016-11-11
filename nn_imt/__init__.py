@@ -125,9 +125,19 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     trainable_params = cg.parameters
 
-    # target_embeddings = model.get_parameter_dict()['/target_recurrent_lm_with_alignments/target_embeddings.W']
-    # trainable_params.remove(source_embeddings)
-    # trainable_params.remove(target_embeddings)
+    # Set up training model
+    logger.info("Building model")
+    training_model = Model(cost)
+
+    # optionally only train part of the graph, leave the rest static
+    training_param_keys = config.get('training_param_keys', None)
+    if training_param_keys is not None:
+        model_params = training_model.get_parameter_dict()
+
+        params_to_remove = [model_params[k] for k in model_params.keys() if not any([p in k for p in training_param_keys])]
+        for p in params_to_remove:
+            trainable_params.remove(p)
+            print('Removed parameter from training graph: {}'.format(p))
 
     # TODO: fixed dropout mask for recurrent params?
     # Print shapes
@@ -146,9 +156,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     logger.info("Total number of parameters: {}"
                 .format(len(enc_dec_param_dict)))
 
-    # Set up training model
-    logger.info("Building model")
-    training_model = Model(cost)
 
     # create the training directory, and copy this config there if directory doesn't exist
     if not os.path.isdir(config['saveto']):

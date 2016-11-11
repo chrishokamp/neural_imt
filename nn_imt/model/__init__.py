@@ -967,11 +967,11 @@ class NMTPrefixDecoder(Initializable):
         # WORKING: SAME BUG WITH attention output names
         # WORKING: dimension mismatch error??
         if type(self.attention) is list:
-            #attention_sources = [attention.take_glimpses.outputs[0] for attention in self.attention]
-            # HACKED
             attention_sources = []
             attention_sources.append(self.attention[0].take_glimpses.outputs[0])
-            attention_sources.append(self.attention[1].take_glimpses.outputs[0] + '_0')
+            if kwargs.get('prefix_attention_in_readout', False):
+                # Name is currently HACKED
+                attention_sources.append(self.attention[1].take_glimpses.outputs[0] + '_0')
 
         else:
             attention_sources = [self.attention.take_glimpses.outputs[0]]

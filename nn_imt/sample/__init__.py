@@ -16,6 +16,7 @@ import theano
 import subprocess
 import codecs
 import tempfile
+import json
 
 from blocks.extensions import SimpleExtension
 from blocks.search import BeamSearch
@@ -150,7 +151,7 @@ class Sampler(SimpleExtension, SamplingBase):
 
     def __init__(self, model, data_stream, hook_samples=1,
                  src_vocab=None, trg_vocab=None, src_ivocab=None,
-                 trg_ivocab=None, src_vocab_size=None, **kwargs):
+                 trg_ivocab=None, src_vocab_size=None, sample_output_file=None, **kwargs):
         super(Sampler, self).__init__(**kwargs)
         self.model = model
         self.hook_samples = hook_samples
@@ -161,6 +162,7 @@ class Sampler(SimpleExtension, SamplingBase):
         self.trg_ivocab = trg_ivocab
         self.src_vocab_size = src_vocab_size
         self.is_synced = False
+        self.sample_output_file = sample_output_file
 
         self.sampling_fn = model.get_theano_function()
 
@@ -207,32 +209,51 @@ class Sampler(SimpleExtension, SamplingBase):
 
         # Sample
         print()
+        new_samples = []	
         for i in range(hook_samples):
+
             input_length = self._get_true_length(input_[i], self.src_vocab)
 
             prefix_length = self._get_true_length(prefix_[i], self.trg_vocab)
-            target_length = self._get_true_length(target_[i], self.trg_vocab)
+            suffix_length = self._get_true_length(suffix_[i], self.trg_vocab)
 
             inp = input_[i, :input_length]
             prefix = prefix_[i, :prefix_length]
 
             # outputs of self.sampling_fn:
-            _1, outputs, _2, _3, costs = (self.sampling_fn(inp[None, :], prefix[None, :]))
+	        #import ipdb; ipdb.set_trace()
+            # Note that the order of arguments to self.sampling_fn is dependent upon Model.get_theano_function
+            # Note: currently [sampling_target_prefix, sampling_input]
+            _1, outputs, _2, _3, _4, _, costs, _, _ = self.sampling_fn(prefix[None, :], inp[None, :])
             outputs = outputs.flatten()
             costs = costs.T
 
             sample_length = self._get_true_length(outputs, self.trg_vocab)
 
-            print("Input : ", self._idx_to_word(input_[i][:input_length],
-                                                self.src_ivocab))
-            print("Prefix: ", self._idx_to_word(prefix_[i][:target_length],
-                                                self.trg_ivocab))
-            print("Suffix: ", self._idx_to_word(suffix_[i][:target_length],
-                                                self.trg_ivocab))
-            print("Sample: ", self._idx_to_word(outputs[:sample_length],
-                                                self.trg_ivocab))
-            print("Sample cost: ", costs[:sample_length].sum())
+            this_input = self._idx_to_word(input_[i][:input_length], self.src_ivocab)
+            this_prefix = self._idx_to_word(prefix_[i][:prefix_length], self.trg_ivocab)
+
+            this_suffix = self._idx_to_word(suffix_[i][:suffix_length], self.trg_ivocab)
+            this_sample = self._idx_to_word(outputs[:sample_length], self.trg_ivocab)
+            this_cost = float(costs[:sample_length].sum())
+
+            new_samples.append({
+                    'input': this_input,
+                    'prefix': this_prefix,
+                    'suffix': this_suffix,
+                    'sample': this_sample,
+                    'cost': this_cost})
+
+            print("Input : ", this_input)
+            print("Prefix: ", this_prefix)
+            print("Suffix: ", this_suffix)
+            print("Sample: ",  this_sample)
+            print("Sample cost: ", this_cost)
             print()
+
+        if self.sample_output_file is not None:
+            with codecs.open(self.sample_output_file, 'a', encoding='utf8') as samples_out:
+                samples_out.write(json.dumps(new_samples, indent=2) + '\n')
 
 
 # Note: this validator depends upon us having a file of references, but for IMT the references are generated on the fly

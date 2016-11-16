@@ -8,37 +8,6 @@ from blocks.utils import dict_union, dict_subset, pack
 
 from blocks.bricks.attention import AbstractAttentionRecurrent
 
-# WORKING: subclass AttentionRecurrent?
-# WORKING -- code buffer
-
-# @lazy(allocation=['input_names', 'input_dims', 'output_dims'])
-# def __init__(self, input_names, input_dims, output_dims,
-#              prototype, child_prefix=None, **kwargs):
-#     super(Parallel, self).__init__(**kwargs)
-#     if not child_prefix:
-#         child_prefix = "transform"
-#
-#     self.input_names = input_names
-#     self.input_dims = input_dims
-#     self.output_dims = output_dims
-#     self.prototype = prototype
-#
-#     self.children = []
-#     for name in input_names:
-#         self.children.append(copy.deepcopy(self.prototype))
-#         self.children[-1].name = "{}_{}".format(child_prefix, name)
-#
-# def _push_allocation_config(self):
-#     for input_dim, output_dim, child in \
-#             equizip(self.input_dims, self.output_dims, self.children):
-#         child.input_dim = input_dim
-#         child.output_dim = output_dim
-
-# class NamedSequenceContentAttention
-
-
-
-
 
 class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
     """Combines an attention mechanism and a recurrent transition.
@@ -311,6 +280,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         if 'initial_states' in kwargs:
             kwargs.pop('initial_states')
 
+        update_inputs_with_additional_attention = kwargs.pop('additional_attention_in_internal_states', True)
 
         # if user provided additional attentions, update with multiple glimpses from multiple attentions
         # update sequences for each attention (sum distribute brick output with current sequence representation
@@ -326,10 +296,13 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
                 # Note that we skip the "add_contexts" logic above, and just assume it's true
                 kwargs.pop(attended_name)
                 kwargs.pop(attended_mask_name, None)
-                # apply the current attention
-                sequences.update(distribute.apply(
-                                 as_dict=True, **dict_subset(dict_union(sequences, current_glimpses),
-                                 distribute.apply.inputs)))
+
+                # apply the current attention to update the sequences
+                if update_inputs_with_additional_attention:
+                    distribute_output = distribute.apply(
+                        as_dict=True, **dict_subset(dict_union(sequences, current_glimpses),
+                        distribute.apply.inputs))
+                    sequences.update(distribute_output)
 
 
         # Finally apply the default attention

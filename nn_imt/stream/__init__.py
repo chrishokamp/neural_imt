@@ -78,8 +78,7 @@ class PrefixSuffixStreamTransformer:
         # TODO: add the ability to always generate the same samples by resetting the seed
         assert self.sample_ratio > 0. and self.sample_ratio <= 1., '0. < sample_ratio <= 1.'
 
-        # WORKING: only sample suffixes above a certain length
-        # WORKING: there will be cases where
+        # only sample suffixes above a certain length
         self.min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None)
         if self.min_suffix_source_ratio is not None:
             assert self.min_suffix_source_ratio > 0. and self.min_suffix_source_ratio <= 1., '0. < min_suffix_source_ratio <= 1.'
@@ -90,6 +89,7 @@ class PrefixSuffixStreamTransformer:
         # whether we should always generate the same samples
         # TODO: there is an error in the logic here, see below
         self.static_samples = kwargs.get('static_samples', False)
+        self.do_not_expand = kwargs.get('nmt_baseline_training', False)
 
 
     def __call__(self, data, **kwargs):
@@ -102,7 +102,8 @@ class PrefixSuffixStreamTransformer:
                                                                                  eos_token=True,
                                                                                  **kwargs))
 
-        if self.min_suffix_source_ratio is not None:
+        # TODO: HACK here -- pairs should be pre-filtered so that the ratio cannot be crazy skewed
+        if self.min_suffix_source_ratio is not None and (float(len(reference)) / float(len(source))) >= 0.8:
             source_len = float(len(sources[0]))
             good_idxs = [idx for idx, seq in enumerate(target_suffixes)
                          if (float(len(seq)) / source_len) >= self.min_suffix_source_ratio]
@@ -110,6 +111,8 @@ class PrefixSuffixStreamTransformer:
             sources = [sources[idx] for idx in good_idxs]
             target_prefixes = [target_prefixes[idx] for idx in good_idxs]
             target_suffixes = [target_suffixes[idx] for idx in good_idxs]
+            if len(good_idxs) == 0:
+                import ipdb; ipdb.set_trace()
 
 
         if self.sample_ratio < 1.:
@@ -117,6 +120,10 @@ class PrefixSuffixStreamTransformer:
             sample_idxs = self.random_state.choice(range(len(target_prefixes)), num_samples)
         else:
             sample_idxs = range(len(target_prefixes))
+
+        # TODO: this should be done before expansion to save computation
+        if self.do_not_expand:
+            sample_idxs=[0]
 
         logging.info('Generating {} samples, overall len is {}'.format(len(sample_idxs), len(target_prefixes)))
 
@@ -344,7 +351,8 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     stream = Mapping(stream,
                      PrefixSuffixStreamTransformer(
                          sample_ratio=kwargs.get('train_sample_ratio', 1.),
-                         min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None)),
+                         min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None),
+                         nmt_baseline_training = kwargs.get('nmt_baseline_training', False)),
                      add_sources=('target_prefix', 'target_suffix'))
 
     stream = Mapping(stream, CopySourceAndTargetToMatchPrefixes(stream))

@@ -43,7 +43,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# WORKING: remember to cut the suffix for validation to only one EOS token
 def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=False):
 
     # Create Theano variables
@@ -53,8 +52,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Note that the _names_ are changed from normal NMT
     # for IMT training, we use only the suffix as the reference
-    target_sentence = tensor.lmatrix('target_suffix')
-    target_sentence_mask = tensor.matrix('target_suffix_mask')
+    target_suffix = tensor.lmatrix('target_suffix')
+    target_suffix_mask = tensor.matrix('target_suffix_mask')
 
     target_prefix = tensor.lmatrix('target_prefix')
     target_prefix_mask = tensor.matrix('target_prefix_mask')
@@ -77,18 +76,22 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
         config['enc_nhids'] * 2, loss_function='cross_entropy',
-        prefix_attention=prefix_attention)
+        prefix_attention=prefix_attention,
+        prefix_attention_in_readout=config.get('prefix_attention_in_readout', False)
+    )
 
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
 
-    # Note: `target_sentence` could be changed to `target_suffix` for clarity
+    additional_attn_over_internal_states = config.get('distribute_prefix_attention_over_inputs', True)
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask,
         target_prefix_representation,
-        target_sentence, target_sentence_mask,
-        target_prefix, target_prefix_mask)
+        target_suffix, target_suffix_mask,
+        target_prefix, target_prefix_mask,
+        additional_attention_in_internal_states=additional_attn_over_internal_states
+    )
 
     logger.info('Creating computational graph')
     cg = ComputationGraph(cost)
@@ -180,16 +183,18 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                                                     prefix_encoder=prefix_encoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
-    # TODO: commented while hacking prefix attention
-    # if config['hook_samples'] >= 1:
-    #     logger.info("Building sampler")
-    #     extensions.append(
-    #         Sampler(model=search_model, data_stream=tr_stream,
-    #                 hook_samples=config['hook_samples'],
-    #                 every_n_batches=config['sampling_freq'],
-    #                 src_vocab=source_vocab,
-    #                 trg_vocab=target_vocab,
-    #                 src_vocab_size=config['src_vocab_size']))
+    #WOrKING Note default sample output file
+    if config['hook_samples'] >= 1:
+        logger.info("Building sampler")
+        extensions.append(
+            Sampler(model=search_model, data_stream=tr_stream,
+                    hook_samples=config['hook_samples'],
+                    every_n_batches=config['sampling_freq'],
+                    src_vocab=source_vocab,
+                    trg_vocab=target_vocab,
+                    src_vocab_size=config['src_vocab_size'],
+	            sample_output_file=config.get('sample_output_file', 'samples.out.log'))
+	)
 
     # Add early stopping based on bleu
     # if config['bleu_script'] is not None:
@@ -303,7 +308,9 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     if decoder is None:
         decoder = NMTPrefixDecoder(
             exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-            exp_config['enc_nhids'] * 2, loss_function='cross_entropy', prefix_attention=prefix_attention)
+            exp_config['enc_nhids'] * 2, loss_function='cross_entropy', prefix_attention=prefix_attention,
+            prefix_attention_in_readout=exp_config.get('prefix_attention_in_readout', False)
+        )
         # rename to match baseline NMT systems so that params can be transparently initialized
         decoder.name = 'decoder'
 
@@ -322,9 +329,12 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
 
     # Note: prefix can be empty if we want to simulate baseline NMT
     n_steps = exp_config.get('n_steps', None)
+    additional_attn_over_internal_states = exp_config.get('distribute_prefix_attention_over_inputs', True)
+
     generated = decoder.generate(sampling_input, sampling_representation,
                                  target_prefix=sampling_prefix,
                                  prefix_representation=prefix_representation,
+                                 additional_attention_in_internal_states=additional_attn_over_internal_states,
                                  n_steps=n_steps)
 
     # create the 1-step sampling graph

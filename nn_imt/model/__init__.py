@@ -60,8 +60,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             attentions = [attentions]
         self.attentions = attentions
 
-        # WORKING: support multiple attentions transparently -- allow to pass a list of attentions (which may contain only 1)
-        # WORKING: remember that we still need to support legacy behavior transparently
         transition = InitialStateAttentionRecurrent(
             transition, attentions,
             add_contexts=add_contexts, name="att_trans")
@@ -113,6 +111,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # WORKING: this method gets called, then VariableFilter gets the outputs for beam search
         # WORKING: glimpses is a list len(glimpses) % 2 = 0
         use_additional_attention = kwargs.get('use_additional_attention', False)
+        update_inputs_with_additional_attention = kwargs.pop('additional_attention_in_internal_states', True)
 
         next_glimpses = self.transition.take_glimpses(
             as_dict=True, use_additional_attention=use_additional_attention, **dict_union(states, glimpses, contexts))
@@ -126,6 +125,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                        if self.fork else {'feedback': next_feedback})
         next_states = self.transition.compute_states(
             as_list=True,
+            additional_attention_in_internal_states=update_inputs_with_additional_attention,
             **dict_union(next_inputs, states, next_glimpses, contexts))
 
         # TODO: switch to directly getting the probs from softmax
@@ -192,6 +192,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             prefix_context_names = ['attended', 'attended_mask']
             prefix_contexts = dict_subset(contexts, prefix_context_names, must_have=True)
 
+            # WORKING: does feedback need to be rolled one forward here?
             feedback = self.readout.feedback(target_prefix)
             inputs = self.fork.apply(feedback, as_dict=True)
 
@@ -301,7 +302,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         batch_size = outputs.shape[1]
 
         # TODO: move all of the state computation logic to self.compute_states, use kwargs to support initial states and glimpses
-        # Prepare input for the iterative part
         # run the model through the target prefix, then init the model with the correct states
         prefix_feedback = self.readout.feedback(prefix_outputs)
 
@@ -336,10 +336,12 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # WORKING: this transition can only be trained ("tuned" for IMT) -- baseline is the transition without multiple attentions
         # WORKING: (some of) the pre-trained parameters can optionally be held static
         # WORKING: we have the prefix states from the first application of the recurrent transition (see the initial state extraction above)
+
         results = self.transition.apply(
             mask=mask, return_initial_states=True, as_dict=True,
             initial_states=prefix_initial_states,
             initial_glimpses=prefix_initial_glimpses,
+            additional_attention_in_internal_states=kwargs.get('additional_attention_in_internal_states', True),
             **dict_union(inputs, states, contexts))
 
         # Separate the deliverables. The last states are discarded: they
@@ -352,10 +354,17 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         # Compute the cost
         # Note: setting the first element of feedback to the last feedback of the prefix
+
+        # WORKING: fix errors with feedback
         feedback = tensor.roll(feedback, 1, 0)
-        feedback = tensor.set_subtensor(feedback[0], prefix_feedback[-1])
-            # feedback[0],
-            # self.readout.feedback(self.readout.initial_outputs(batch_size)))
+        # note that we subtract 1 from the summed mask to get the correct index
+        #feedback = tensor.set_subtensor(feedback[0],
+        #        prefix_feedback[prefix_mask.sum(axis=0).astype('int16')-1, tensor.arange(batch_size), :])
+        # WORKING: is this line why we can't learn??
+        # WORKING: We need to set the feedback to the last _real_ input of the prefix -- ie sum mask to get the real lengths and select the final feedback
+        feedback = tensor.set_subtensor(feedback[0],
+                self.readout.feedback(self.readout.initial_outputs(batch_size)))
+
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))
         costs = self.readout.cost(readouts, outputs)
@@ -883,6 +892,7 @@ class NMTPrefixDecoder(Initializable):
                  representation_dim, theano_seed=None, loss_function='cross_entropy',
                  use_post_merge=True,
                  prefix_attention=False,
+                 prefix_attention_in_readout=False,
                  **kwargs):
 
         super(NMTPrefixDecoder, self).__init__(**kwargs)
@@ -969,7 +979,7 @@ class NMTPrefixDecoder(Initializable):
         if type(self.attention) is list:
             attention_sources = []
             attention_sources.append(self.attention[0].take_glimpses.outputs[0])
-            if kwargs.get('prefix_attention_in_readout', False):
+            if prefix_attention_in_readout:
                 # Name is currently HACKED
                 attention_sources.append(self.attention[1].take_glimpses.outputs[0] + '_0')
 
@@ -1024,7 +1034,8 @@ class NMTPrefixDecoder(Initializable):
     #                     'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
     @application(outputs=['cost'])
     def cost(self, rep, source_sentence_mask, prefix_representation,
-             target_sentence, target_sentence_mask, target_prefix, target_prefix_mask):
+             target_sentence, target_sentence_mask, target_prefix, target_prefix_mask,
+             additional_attention_in_internal_states=True):
 
         source_sentence_mask = source_sentence_mask.T
 
@@ -1049,7 +1060,8 @@ class NMTPrefixDecoder(Initializable):
               'prefix_mask': target_prefix_mask,
               'prefix_outputs': target_prefix,
               'attended': rep,
-              'attended_mask': source_sentence_mask
+              'attended_mask': source_sentence_mask,
+              'additional_attention_in_internal_states': additional_attention_in_internal_states
             },
             additional_attentions)
         )
@@ -1140,6 +1152,7 @@ class NMTPrefixDecoder(Initializable):
         if kwargs.get('n_steps', None) is None:
             kwargs['n_steps'] = 2 * source_sentence.shape[1]
 
+        # NOTE: another dependency between the kwargs for attention -- probably the way to handle this is by passing a list of (attention, mask) pairs
         if kwargs.get('prefix_representation', None) is not None:
             prefix_representation = kwargs['prefix_representation']
             kwargs['attended_0'] = prefix_representation
@@ -1147,7 +1160,6 @@ class NMTPrefixDecoder(Initializable):
             kwargs['attended_mask_0'] = tensor.ones(target_prefix.shape).T
             kwargs['use_additional_attention'] = True
 
-        # WORKING: another dependency between the kwargs for attention -- probably the way to handle this is by passing a list of (attention, mask) pairs
         return self.sequence_generator.generate(
             batch_size=source_sentence.shape[0],
             attended=representation,

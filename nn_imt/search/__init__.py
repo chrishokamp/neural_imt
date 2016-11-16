@@ -151,9 +151,8 @@ class BeamSearch(object):
         self._compile_next_state_computer()
         self._compile_logprobs_computer()
 
-        # WORKING
+        # Note: optional auxilliary confidence model
         self._compile_confidence_computer()
-        # END WORKING
 
         self.compiled = True
 

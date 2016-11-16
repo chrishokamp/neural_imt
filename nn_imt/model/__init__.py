@@ -318,10 +318,10 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
 
-        # WORKING: we need the initial glimpses for every attention brick
-        # WORKING: we can only init the initial glimpses for the prefix from the previous transition,
-        # WORKING: the initial glimpses for the additional attentions must be initialized from scratch (or use the prefix initial glimpse?)
-        # WORKING: remember that the previous glimpses aren't actually used in our model anyway
+        # we need the initial glimpses for every attention brick
+        # we can only init the initial glimpses for the prefix from the previous transition,
+        # the initial glimpses for the additional attentions must be initialized from scratch (or use the prefix initial glimpse?)
+        # NOTE: remember that the previous glimpses aren't actually used in our model anyway
         # TODO: does this make sense for the initial glimpses? these are the glimpses we used
         # TODO: to compute the last word of the prefix
         # TODO: We can only get the initial glimpses for the original attention, not for all attentions
@@ -332,11 +332,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         inputs = self.fork.apply(feedback, as_dict=True)
 
         # Run the recurrent network
-        # WORKING: create a second transition which includes attention over the prefix states
-        # WORKING: this transition can only be trained ("tuned" for IMT) -- baseline is the transition without multiple attentions
-        # WORKING: (some of) the pre-trained parameters can optionally be held static
-        # WORKING: we have the prefix states from the first application of the recurrent transition (see the initial state extraction above)
-
+        # this creates a second transition which includes attention over the prefix states
+        # this transition can only be trained ("tuned" for IMT) -- baseline is the transition without multiple attentions
+        # (some of) the pre-trained parameters can optionally be held static
         results = self.transition.apply(
             mask=mask, return_initial_states=True, as_dict=True,
             initial_states=prefix_initial_states,
@@ -358,12 +356,12 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # WORKING: fix errors with feedback
         feedback = tensor.roll(feedback, 1, 0)
         # note that we subtract 1 from the summed mask to get the correct index
-        #feedback = tensor.set_subtensor(feedback[0],
-        #        prefix_feedback[prefix_mask.sum(axis=0).astype('int16')-1, tensor.arange(batch_size), :])
+        feedback = tensor.set_subtensor(feedback[0],
+               prefix_feedback[prefix_mask.sum(axis=0).astype('int16')-1, tensor.arange(batch_size), :])
         # WORKING: is this line why we can't learn??
         # WORKING: We need to set the feedback to the last _real_ input of the prefix -- ie sum mask to get the real lengths and select the final feedback
-        feedback = tensor.set_subtensor(feedback[0],
-                self.readout.feedback(self.readout.initial_outputs(batch_size)))
+        # feedback = tensor.set_subtensor(feedback[0],
+        #         self.readout.feedback(self.readout.initial_outputs(batch_size)))
 
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))

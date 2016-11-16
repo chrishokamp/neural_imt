@@ -167,6 +167,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Set extensions
     logger.info("Initializing extensions")
+
+    # Remember that the order of extensions can be important if they write things to the log
     extensions = [
         FinishAfter(after_n_batches=config['finish_after']),
         TrainingDataMonitoring([cost], after_batch=True),

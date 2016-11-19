@@ -73,11 +73,13 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         target_prefix_representation = prefix_encoder.apply(target_prefix, target_prefix_mask)
         prefix_attention = True
 
+    prefix_in_initial_state = config.get('prefix_in_initial_state', True)
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
         config['enc_nhids'] * 2, loss_function='cross_entropy',
         prefix_attention=prefix_attention,
-        prefix_attention_in_readout=config.get('prefix_attention_in_readout', False)
+        prefix_attention_in_readout=config.get('prefix_attention_in_readout', False),
+	prefix_in_initial_state=prefix_in_initial_state
     )
 
     # rename to match baseline NMT systems
@@ -90,7 +92,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         target_prefix_representation,
         target_suffix, target_suffix_mask,
         target_prefix, target_prefix_mask,
-        additional_attention_in_internal_states=additional_attn_over_internal_states
+        additional_attention_in_internal_states=additional_attn_over_internal_states,
+	prefix_in_initial_state=prefix_in_initial_state
     )
 
     logger.info('Creating computational graph')
@@ -333,10 +336,12 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     n_steps = exp_config.get('n_steps', None)
     additional_attn_over_internal_states = exp_config.get('distribute_prefix_attention_over_inputs', True)
 
+    prefix_in_initial_state = exp_config.get('prefix_in_initial_state', True)
     generated = decoder.generate(sampling_input, sampling_representation,
                                  target_prefix=sampling_prefix,
                                  prefix_representation=prefix_representation,
                                  additional_attention_in_internal_states=additional_attn_over_internal_states,
+				 prefix_in_initial_state=prefix_in_initial_state,
                                  n_steps=n_steps)
 
     # create the 1-step sampling graph

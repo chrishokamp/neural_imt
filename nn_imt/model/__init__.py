@@ -23,6 +23,7 @@ from blocks.bricks.sequence_generators import (
     SequenceGenerator)
 from blocks.utils import pack
 from blocks.bricks.attention import AttentionRecurrent
+from blocks.bricks.recurrent.architectures import GatedRecurrent
 
 from machine_translation.model import (InitializableFeedforwardSequence, LookupFeedbackWMT15, GRUInitialState)
 from blocks.bricks.sequence_generators import BaseSequenceGenerator
@@ -174,7 +175,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         states of the prefix
         """
 
-        if 'target_prefix' in kwargs:
+        if 'target_prefix' in kwargs and kwargs.get('prefix_in_initial_state', True):
             # Note the transpose
             target_prefix = kwargs['target_prefix'].T
             # TODO: in the batch implementation, each target prefix will have different lengths,
@@ -302,6 +303,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # We assume the data has axes (time, batch, features, ...)
         batch_size = outputs.shape[1]
 
+
         # TODO: move all of the state computation logic to self.compute_states, use kwargs to support initial states and glimpses
         # run the model through the target prefix, then init the model with the correct states
         prefix_feedback = self.readout.feedback(prefix_outputs)
@@ -317,22 +319,24 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         prefix_results = self.compute_states(prefix_outputs, mask=prefix_mask, **dict_union(states, prefix_contexts))
 
-        prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
-
-        # we need the initial glimpses for every attention brick
-        # we can only init the initial glimpses for the prefix from the previous transition,
-        # the initial glimpses for the additional attentions must be initialized from scratch (or use the prefix initial glimpse?)
-        # NOTE: remember that the previous glimpses aren't actually used in our model anyway
-        # TODO: does this make sense for the initial glimpses? these are the glimpses we used
-        # TODO: to compute the last word of the prefix
-        # TODO: We can only get the initial glimpses for the original attention, not for all attentions
-        prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
-
-        # Now compute the suffix representation, and use the prefix initial states to init the recurrent transition
+        # Run the recurrent network for the output
+        prefix_initial_states = None
+        prefix_initial_glimpses = None
+        prefix_in_initial_state = kwargs.get('prefix_in_initial_state', True)
+        if prefix_in_initial_state:
+            prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
+            # we need the initial glimpses for every attention brick
+            # we can only init the initial glimpses for the prefix from the previous transition,
+            # the initial glimpses for the additional attentions must be initialized from scratch (or use the prefix initial glimpse?)
+            # NOTE: remember that the previous glimpses aren't actually used in our model anyway
+            # TODO: does this make sense for the initial glimpses? these are the glimpses we used
+            # TODO: to compute the last word of the prefix
+            # TODO: We can only get the initial glimpses for the original attention, not for all attentions
+            prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
+            
+        # Now compute the suffix representation, and optionally use the prefix initial states to init the recurrent transition
         feedback = self.readout.feedback(outputs)
         inputs = self.fork.apply(feedback, as_dict=True)
-
-        # Run the recurrent network
         # this creates a second transition which includes attention over the prefix states
         # this transition can only be trained ("tuned" for IMT) -- baseline is the transition without multiple attentions
         # (some of) the pre-trained parameters can optionally be held static
@@ -354,21 +358,22 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # Compute the cost
         # Note: setting the first element of feedback to the last feedback of the prefix
 
-        # WORKING: fix errors with feedback
         feedback = tensor.roll(feedback, 1, 0)
-        # note that we subtract 1 from the summed mask to get the correct index
-        feedback = tensor.set_subtensor(feedback[0],
-               prefix_feedback[prefix_mask.sum(axis=0).astype('int16')-1, tensor.arange(batch_size), :])
-        # WORKING: is this line why we can't learn??
-        # WORKING: We need to set the feedback to the last _real_ input of the prefix -- ie sum mask to get the real lengths and select the final feedback
-        # feedback = tensor.set_subtensor(feedback[0],
-        #         self.readout.feedback(self.readout.initial_outputs(batch_size)))
+
+        if prefix_in_initial_state:
+            # note that we subtract 1 from the summed mask to get the correct index
+            # the intuition is that we need to set the feedback to the last _real_ input of the prefix -- ie sum mask to get the real lengths and select the final feedback
+            feedback = tensor.set_subtensor(feedback[0],
+                   prefix_feedback[prefix_mask.sum(axis=0).astype('int16')-1, tensor.arange(batch_size), :])
+        else:
+            feedback = tensor.set_subtensor(feedback[0],
+                    self.readout.feedback(self.readout.initial_outputs(batch_size)))
 
         readouts = self.readout.readout(
             feedback=feedback, **dict_union(states, glimpses, contexts))
         costs = self.readout.cost(readouts, outputs)
 
-        # WORKING: scale costs by position 
+        # scale costs by position 
         # TODO: make this optional
         # idea: tile an arange to match the shape of costs, then scale by reciprocal of position
         # idx_range = tensor.arange(1, costs.shape[-1] + 1)
@@ -394,7 +399,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         return costs
 
-    # WORKING: return the final states -- intuitively the last thing that happens at this timestep
+    # return the final states -- intuitively the last thing that happens at this timestep
     def get_final_states(self, outputs, prefix_outputs, mask=None, prefix_mask=None, **kwargs):
         """Returns the final states at this timestep -- compute the glimpses, readouts and emissions, then run the transition
          to get the states. The state representation is computed _after_ a word has been predicted
@@ -644,8 +649,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         #flat_y = y_true.reshape((readout_shape[0]*readout_shape[1], 1))
 
-
-
         # TODO: hang auxiliary variables and monitor them to see what their shapes are
 
 
@@ -837,7 +840,7 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
         Allow user to either pass initial states, or pass through to default behavior
         """
         # WORKING: initial_glimpses can be a list
-        if 'initial_states' in kwargs and 'initial_glimpses' in kwargs:
+        if kwargs.get('initial_states', None) is not None and kwargs.get('initial_glimpses', None) is not None:
             # Note: these states currently get popped out of AttentionRecurrent kwargs in the same way as mmmt
             # Note: the modification is in MultipleAttentionRecurrent.compute_states
             # WORKING: get initial states for each of the attentions, make sure we can reuse the params for:
@@ -890,6 +893,7 @@ class NMTPrefixDecoder(Initializable):
                  use_post_merge=True,
                  prefix_attention=False,
                  prefix_attention_in_readout=False,
+                 prefix_in_initial_state=True,
                  **kwargs):
 
         super(NMTPrefixDecoder, self).__init__(**kwargs)
@@ -899,10 +903,16 @@ class NMTPrefixDecoder(Initializable):
         self.representation_dim = representation_dim
         self.theano_seed = theano_seed
 
-        # Initialize gru with special initial state
-        self.transition = GRUInitialState(
-            attended_dim=state_dim, dim=state_dim,
-            activation=Tanh(), name='decoder')
+        # Working: transition optionally initializes initial state (inspired by GNMT)
+        # Initialize GRU with special initial state
+        if prefix_in_initial_state:
+            self.transition = GRUInitialState(
+                attended_dim=state_dim, dim=state_dim,
+                activation=Tanh(), name='decoder')
+        else:
+            self.transition = GatedRecurrent(
+                dim=state_dim,
+                activation=Tanh(), name='decoder')
 
         # Initialize the attention mechanism(s)
         # WORKING: attentions go in a list, but the first one falls back to NIMT default behavior
@@ -1024,7 +1034,8 @@ class NMTPrefixDecoder(Initializable):
     @application(outputs=['cost'])
     def cost(self, rep, source_sentence_mask, prefix_representation,
              target_sentence, target_sentence_mask, target_prefix, target_prefix_mask,
-             additional_attention_in_internal_states=True):
+             additional_attention_in_internal_states=True,
+             prefix_in_initial_state=True):
 
         source_sentence_mask = source_sentence_mask.T
 
@@ -1147,6 +1158,7 @@ class NMTPrefixDecoder(Initializable):
             target_prefix = kwargs['target_prefix']
             kwargs['attended_mask_0'] = tensor.ones(target_prefix.shape).T
             kwargs['use_additional_attention'] = True
+            # there may be other relevant kwargs, such as `prefix_in_initial_state`
 
         return self.sequence_generator.generate(
             batch_size=source_sentence.shape[0],
@@ -1156,3 +1168,22 @@ class NMTPrefixDecoder(Initializable):
 
 
 
+# WORKING: use a shared embedding between source and target -- Feedback brick which allows for this
+# class LookupFeedbackWMT15(LookupFeedback):
+    # """Zero-out initial readout feedback by checking its value."""
+    #
+    # @application
+    # def feedback(self, outputs):
+    #     assert self.output_dim == 0
+    #
+    #     shp = [outputs.shape[i] for i in range(outputs.ndim)]
+    #     outputs_flat = outputs.flatten()
+    #     outputs_flat_zeros = tensor.switch(outputs_flat < 0, 0,
+    #                                        outputs_flat)
+    #
+    #     lookup_flat = tensor.switch(
+    #         outputs_flat[:, None] < 0,
+    #         tensor.alloc(0., outputs_flat.shape[0], self.feedback_dim),
+    #         self.lookup.apply(outputs_flat_zeros))
+    #     lookup = lookup_flat.reshape(shp+[self.feedback_dim])
+    #     return lookup

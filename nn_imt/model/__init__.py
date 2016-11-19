@@ -861,8 +861,7 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
         else:
             initial_states = super(InitialStateAttentionRecurrent, self).initial_states(batch_size, **kwargs)
 
-        # WORKING: when special initial states aren't available, and we're not using the additional attention, we need to return dummy initial states
-
+        # when special initial states aren't available, and we're not using the additional attention -- i.e. when computing the representation for the prefix, we need to return dummy initial states
         return initial_states
 
     @initial_states.property('outputs')
@@ -870,9 +869,8 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
         return self.do_apply.states
 
 
-# WORKING: make the prefix representation configurable, so that we can swap out modules (forward recurrent, bidir, attention)
-# WORKING: preserve initialization from NMT behavior, even when we've added new parameters for the prefix representation
-# WORKING: make sure the prefix mask is handled correctly
+# TODO: make the prefix representation configurable, so that we can swap out modules (forward recurrent, bidir, attention)
+# TODO: make sure the prefix mask is handled correctly
 class NMTPrefixDecoder(Initializable):
     """
     This decoder lets you use a trained NMT model for IMT prediction without changing anything
@@ -908,9 +906,8 @@ class NMTPrefixDecoder(Initializable):
 
         # Initialize the attention mechanism(s)
         # WORKING: attentions go in a list, but the first one falls back to NIMT default behavior
-        # WORKING: HACK here -- 2x source attention just to check
-        # WORKING: the prefix attention is only used in the _second_ recurrent transition of the decoder
-        # WORKING: this means that additional attentions need to be optional each time transition.apply is called
+        #  the prefix attention is only used in the _second_ recurrent transition of the decoder
+        # this means that additional attentions need to be optional each time transition.apply is called
         if prefix_attention:
             self.attention = []
             self.attention.append(SequenceContentAttention(
@@ -918,14 +915,12 @@ class NMTPrefixDecoder(Initializable):
                 attended_dim=representation_dim,
                 match_dim=state_dim, name="attention"))
 
-            # WORKING: try to rename outputs
+            # Note the name for the additional attention
             additional_attention = SequenceContentAttention(
                 state_names=self.transition.apply.states,
                 attended_dim=representation_dim,
                 match_dim=state_dim, name="prefix_attention")
-            #     take_glimpses_inputs=['attended_0', 'preprocessed_attended_0', 'attended_mask_0'])
-            # additional_attention.take_glimpses.inputs = additional_attention.state_names + \
-            #                                             ['attended_0', 'preprocessed_attended_0', 'attended_mask_0']
+
             self.attention.append(additional_attention)
 
         else:
@@ -943,7 +938,7 @@ class NMTPrefixDecoder(Initializable):
                  # Maxout(num_pieces=2, name='maxout').apply,
                  # Linear(input_dim=state_dim / 2, output_dim=300, use_bias=True, name='confidence_model1').apply,
 
-                 # WORKING: adding the softmax feature is currently hacked because it's not supported at inference time (in search and generation)
+                 # adding the softmax feature is currently hacked because it's not supported at inference time (in search and generation)
                  # we add one to the state dim because we added the softmax argmax probability as a feature
                  # Linear(input_dim=state_dim + 1, output_dim=300, use_bias=True, name='confidence_model1').apply,
                  Linear(input_dim=state_dim, output_dim=300, use_bias=True, name='confidence_model1').apply,
@@ -953,7 +948,6 @@ class NMTPrefixDecoder(Initializable):
                  Linear(input_dim=100, output_dim=1, use_bias=True, name='confidence_model3').apply,
                  Logistic().apply])
                  # Linear(input_dim=state_dim, output_dim=1, use_bias=True, name='confidence_model1').apply])
-        # END WORKING: add the confidence model
 
 
         # we allow use post merge to be configurable so that we can train confidence models which directly use
@@ -973,13 +967,12 @@ class NMTPrefixDecoder(Initializable):
 
         # Chris: it's key that we're taking the first output of self.attention.take_glimpses.outputs
         # Chris: the first output is the weighted avgs, the second is the weights in (batch, time)
-        # WORKING: SAME BUG WITH attention output names
-        # WORKING: dimension mismatch error??
         if type(self.attention) is list:
             attention_sources = []
             attention_sources.append(self.attention[0].take_glimpses.outputs[0])
             if prefix_attention_in_readout:
                 # Name is currently HACKED
+                # WORKING: SAME BUG WITH attention output names
                 attention_sources.append(self.attention[1].take_glimpses.outputs[0] + '_0')
 
         else:
@@ -995,10 +988,7 @@ class NMTPrefixDecoder(Initializable):
 
         # Build sequence generator accordingly
         # TODO: remove the semantic overloading of the `loss_function` kwarg
-        # WORKING: attentions kwarg accepts a list of things to compute attention over, the first thing in that list
-        # WORKING: maintains the default behavior
-        # WORKING: bidir recurrent over target_prefix, or attention over the pre-computed target prefix states?
-        # WORKING: intuitively, we want to make sure _not_ to translate things that are already in the target prefix
+        # None: intuitively, we want to make sure _not_ to translate things that are already in the target prefix
         print("loss function is: {}".format(loss_function))
         if loss_function == 'cross_entropy':
             # Note: it's the PartialSequenceGenerator which lets us condition upon the target prefix
@@ -1050,8 +1040,7 @@ class NMTPrefixDecoder(Initializable):
             additional_attentions['attended_mask_0'] = target_prefix_mask
 
         # Get the cost matrix
-        # WORKING: there is a hard-coded dependency between the 'attended' kwarg and the 'attended' in the recurrent transition
-        # WORKING: how to get around this?
+        # Note: there is a hard-coded dependency between the 'attended' kwarg and the 'attended' in the recurrent transition
         cost = self.sequence_generator.cost_matrix(**dict_union(
             {
               'mask': target_sentence_mask,
@@ -1120,8 +1109,8 @@ class NMTPrefixDecoder(Initializable):
         return (cost_matrix * target_sentence_mask).sum() / \
                target_sentence_mask.shape[1]
 
-    # WORKING: in this formulation, the "target sentence" is actually assumed to be a prediction output by the model
-    # WORKING: a better way would be to output the confidence at each generation step
+    # Note: in this formulation, the "target sentence" is actually assumed to be a prediction output by the model
+    # Note: a better way would be to output the confidence at each generation step
     @application(inputs=['readouts'],
                  outputs=['confidence_scores'])
     def get_confidence(self, readouts):
@@ -1134,7 +1123,7 @@ class NMTPrefixDecoder(Initializable):
 
 
     # Note: this requires the decoder to be using sequence_generator which implements expected cost
-    # WORKING: implement expected cost for target prefix decoding
+    # TODO: implement expected cost for target prefix decoding
     @application(inputs=['representation', 'source_sentence_mask',
                          'target_samples_mask', 'target_samples', 'scores'],
                  outputs=['cost'])

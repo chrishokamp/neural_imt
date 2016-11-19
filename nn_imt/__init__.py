@@ -185,7 +185,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
                                                     prefix_encoder=prefix_encoder)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
-    #WOrKING Note default sample output file
+    # Note default sample output file
     if config['hook_samples'] >= 1:
         logger.info("Building sampler")
         extensions.append(

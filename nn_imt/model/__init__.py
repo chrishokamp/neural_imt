@@ -139,8 +139,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         next_confidences = self.confidence_model.apply(next_states[0])
 
-        return (next_states + [next_outputs] +
-                list(next_glimpses.values()) + [next_costs] + [next_probs] + [next_confidences])
+        # Note: we need to always get outputs and costs at the same index, regarless how many glimpses there are
+        return (next_states + [next_outputs] + 
+                list(next_glimpses.values()) +  [next_probs] + [next_confidences] + [next_costs])
 
     @generate.delegate
     def generate_delegate(self):

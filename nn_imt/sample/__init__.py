@@ -224,7 +224,10 @@ class Sampler(SimpleExtension, SamplingBase):
 	        #import ipdb; ipdb.set_trace()
             # Note that the order of arguments to self.sampling_fn is dependent upon Model.get_theano_function
             # Note: currently [sampling_target_prefix, sampling_input]
-            _1, outputs, _2, _3, _4, _, costs, _, _ = self.sampling_fn(prefix[None, :], inp[None, :])
+	    # this is the output of SequenceGenerator.generate
+            sample_fn_output = self.sampling_fn(prefix[None, :], inp[None, :])
+	    outputs = sample_fn_output[1]
+	    costs = sample_fn_output[-1]
             outputs = outputs.flatten()
             costs = costs.T
 

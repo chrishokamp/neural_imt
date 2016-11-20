@@ -154,8 +154,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
     @generate.property('outputs')
     def generate_outputs(self):
+        # WORKING: the order here depends upon the order of the outputs of self.generate(?)
         return (self._state_names + ['outputs'] +
-                self._glimpse_names + ['costs'] + ['word_probs'] + ['word_confidences'])
+                self._glimpse_names +  ['word_probs'] + ['word_confidences'] + ['costs'])
 
     def get_dim(self, name):
         if name in (self._state_names + self._context_names +
@@ -229,11 +230,23 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                 'outputs':  target_prefix[-1],
             }, glimpse_dict)
 
+	elif 'target_prefix' in kwargs and not kwargs.get('prefix_in_initial_state', True):
+	    # simply overwrite the dummy states from MultipleAttentionRecurrent
+            state_dict = dict(
+                self.transition.initial_states(
+                    batch_size, as_dict=True, *args, **kwargs),
+                    outputs=self.readout.initial_outputs(batch_size))
+            if 'weights_0' in self._glimpse_names:
+                prefix_representation = kwargs['prefix_representation']
+                state_dict['weighted_averages_0'] = tensor.zeros((prefix_representation.shape[1], prefix_representation.shape[-1]))
+                state_dict['weights_0'] = tensor.zeros((prefix_representation.shape[1], prefix_representation.shape[0]))
+
         else:
             state_dict = dict(
                 self.transition.initial_states(
                     batch_size, as_dict=True, *args, **kwargs),
                     outputs=self.readout.initial_outputs(batch_size))
+	    # TODO: another transition for YES glimpses NO prefix in internal state?
 
         # make a list of the initial states in the order required by self.generate
         return [state_dict[state_name]
@@ -903,7 +916,7 @@ class NMTPrefixDecoder(Initializable):
         self.representation_dim = representation_dim
         self.theano_seed = theano_seed
 
-        # Working: transition optionally initializes initial state (inspired by GNMT)
+        # Working: transition optionally initializes initial state from source end states (inspired by GNMT)
         # Initialize GRU with special initial state
         # WORKING: error here, we still want the AttentionRecurrent Transition
         #if prefix_in_initial_state:

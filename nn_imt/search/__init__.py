@@ -353,7 +353,7 @@ class BeamSearch(object):
             (indexes, outputs), chosen_costs = self._smallest(
                 next_costs, beam_size, only_first_row=i == 0)
 
-            # Rearrange everything
+            # Rearrange everything in place
             for name in states:
                 states[name] = states[name][indexes]
 
@@ -362,6 +362,7 @@ class BeamSearch(object):
             all_costs = all_costs[:, indexes]
 
             ordered_glimpses = states['weights'][None, :]
+
             all_glimpses = numpy.vstack([all_glimpses, ordered_glimpses])
 
             # Note that confidences are already in sorted order, since we passed the states in sorted order

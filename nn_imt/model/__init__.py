@@ -905,14 +905,15 @@ class NMTPrefixDecoder(Initializable):
 
         # Working: transition optionally initializes initial state (inspired by GNMT)
         # Initialize GRU with special initial state
-        if prefix_in_initial_state:
-            self.transition = GRUInitialState(
-                attended_dim=state_dim, dim=state_dim,
-                activation=Tanh(), name='decoder')
-        else:
-            self.transition = GatedRecurrent(
-                dim=state_dim,
-                activation=Tanh(), name='decoder')
+        # WORKING: error here, we still want the AttentionRecurrent Transition
+        #if prefix_in_initial_state:
+        self.transition = GRUInitialState(
+            attended_dim=state_dim, dim=state_dim,
+            activation=Tanh(), name='decoder')
+        #else:
+        #    self.transition = GatedRecurrent(
+        #        dim=state_dim,
+        #        activation=Tanh(), name='decoder')
 
         # Initialize the attention mechanism(s)
         # WORKING: attentions go in a list, but the first one falls back to NIMT default behavior

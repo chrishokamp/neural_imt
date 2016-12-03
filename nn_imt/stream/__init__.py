@@ -1,5 +1,6 @@
 import numpy
 import logging
+import copy
 
 from fuel.datasets import TextFile
 from fuel.schemes import ConstantScheme
@@ -18,6 +19,58 @@ logger.setLevel(logging.DEBUG)
 def _length(sentence_pair):
     """Assumes suffix is the fourth element in the tuple."""
     return len(sentence_pair[3])
+
+# WORKING: add a transformer to concat source + <B-CONSTRAINT_i> target <E-CONSTRAINT_i>
+# WORKING: take two sources and merge them into a single source, or add a new source(?)
+# WORKING: tokens for B-CONSTRAINT_i and E-CONSTRAINT_i up to N constraints
+# WORKING: PLACEHOLDER-i for target tokens corresponding to *-CONSTRAINT-i tokens
+class SourceAndPrefixTransformer:
+    """
+    Takes a stream of <FILL IN ALL SOURCES> and adds the source: `source_with_constraints`
+
+
+    Parameters
+    ----------
+
+
+    Notes
+    -----
+    At call time, the provided stream must have the sources in the following order: (<FILLIN>)
+    """
+
+    def __init__(self, vocab_dict=None, **kwargs):
+        # TODO: provide the sources in the kwargs
+        # TODO: provide the GAP and CONSTRAINT token format in the kwargs -- let user specify what kind(s) of gaps and constraints are available to the model
+        # the final sources are: ('source', 'source_mask', 'target', 'target_mask', 'target_prefix', 'target_prefix_mask', 'target_suffix', 'target_suffix_mask')
+
+        # TODO: this transformer must know the indexes of the constraint and GAP tokens
+        self.num_constraints = 1
+        self.begin_constraint_prefix = u'B-CONSTRAINT_'
+        self.end_constraint_prefix = u'E-CONSTRAINT_'
+        self.gap_prefix = u'GAP_' 
+
+    def __call__(self, data, **kwargs):
+        """
+        Assumes the sources in `data` are: ('source', 'target', 'target_prefix', 'target_suffix')
+        This is intended to be used with Fuel's `Mapping` transformer
+        """
+        data_image = list(data)
+        source = data_image[0]
+        target_prefix = data_image[2]
+        target_suffix = data_image[3]
+
+        # WORKING: the implicit assumption is that we're going to totally discard the target_prefix -- all constraint information will be available via the attention only
+        # WORKING: build the source + constraint representation
+        # TODO: this transformer must know the indexes of the constraint and GAP tokens
+        #source = np.array(source + [begin_constraint_prefix + '0'] + target_prefix + [self.end_constraint_prefix + '0'] 
+        source = numpy.array(list(source) + [200] + list(target_prefix) + [201])
+        import ipdb; ipdb.set_trace()
+        # TODO: this transformer must know the indexes of the constraint and GAP tokens
+        target_suffix = numpy.array([100] + list(target_suffix))
+        data_image[0] = source
+        data_image[3] = target_suffix
+
+        return tuple(data_image)
 
 
 def map_pair_to_imt_triples(source, reference, bos_token=None, eos_token=None):
@@ -361,6 +414,14 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     stream.produces_examples = False
     # flatten the stream back out into (source, target, target_prefix, target_suffix)
     stream = Unpack(stream)
+
+    # WORKING: Optionally use the source prefix transformer to create a stream for the constraint model
+    # WORKING: whether to use this transformer depends upon configuration
+    stream = Mapping(stream, SourceAndPrefixTransformer())
+    e = stream.get_epoch_iterator()
+    t = e.next()
+
+    import ipdb; ipdb.set_trace()
 
     # Now make a very big batch that we can shuffle
     shuffle_batch_size = kwargs['shuffle_batch_size']

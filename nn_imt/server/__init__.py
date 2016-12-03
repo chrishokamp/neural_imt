@@ -80,20 +80,13 @@ def neural_mt_prefix_decoder():
         source_sentence = request_data['source_sentence'] # Problems in Spanish with 'A~nos. E'
         target_prefix = request_data['target_prefix'] # Problems in Spanish with 'A~nos. E'
 
-        logger.info('Acquired lock')
-        lock.acquire()
+        #logger.info('Acquired lock')
+        #lock.acquire()
 
         translations = prefix_decode(source_lang, target_lang, source_sentence, target_prefix)
 
-        # output_text = ''
-        # for hyp in translations:
-        #     output_text += hyp + '\n'
-
-        # form.target_text = output_text.decode('utf-8')
-        # logger.info('detokenized translations:\n {}'.format(output_text))
-
-        print "Lock release"
-        lock.release()
+        #print "Lock release"
+        #lock.release()
 
     return jsonify({'ranked_completions': translations})
 
@@ -127,11 +120,9 @@ def prefix_decode(source_lang, target_lang, source_sentence, target_prefix, n_be
 
 
 def run_imt_server(predictors, port=5000):
-    import ipdb; ipdb.set_trace()
-    # TODO: a different kind of config for servers -- maps language pairs to NMT configuration files
-    # TODO: server instantiates a predictor for each config, and hashes them by language pair tuples -- i.e. (en,fr)
-    # TODO: make the indexing API visible via the predictor
-    # TODO: NMT passes in a dict of predictors, keys are tuples (source_lang, target_lang)
+    # Note: servers use a special .yaml config format-- maps language pairs to NMT configuration files
+    # the server instantiates a predictor for each config, and hashes them by language pair tuples -- i.e. (en,fr)
+    # INMT passes in a dict of predictors, keys are tuples (source_lang, target_lang)
     app.predictors = predictors
 
     logger.info('Server starting on port: {}'.format(port))

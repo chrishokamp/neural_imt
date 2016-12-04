@@ -272,7 +272,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
 
         # Chris: hack to avoid kwarg error
         # TODO: how did these kwargs get here in the first place, what is the graph??
-        # TODO: will we need initial_glimpses for every attention? -- probably yes
+        # Note that we need initial_glimpses for every attention
         if 'initial_state_context' in kwargs:
             kwargs.pop('initial_state_context')
         if 'initial_glimpses' in kwargs:
@@ -284,7 +284,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
 
         # if user provided additional attentions, update with multiple glimpses from multiple attentions
         # update sequences for each attention (sum distribute brick output with current sequence representation
-        # WORKING: how to decide whether or not to apply additional attentions?
+        # decide whether or not to apply additional attentions
         use_additional_attention = False
         if len(set(kwargs.keys()).intersection(set(self.additional_attended_names))) > 0:
             use_additional_attention = True
@@ -310,7 +310,7 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
             as_dict=True, **dict_subset(dict_union(sequences, glimpses),
                                         self.distribute.apply.inputs)))
 
-        # WORKING we must pop if necessary -- if the glimpses from the initial state didn't get used
+        # we must pop if necessary -- if the glimpses from the initial state didn't get used
         if not use_additional_attention:
             for glimpse_names in self._additional_glimpse_names:
                 for g in glimpse_names:

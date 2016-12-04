@@ -38,16 +38,17 @@ class SourceAndPrefixTransformer:
     At call time, the provided stream must have the sources in the following order: (<FILLIN>)
     """
 
-    def __init__(self, vocab_dict=None, **kwargs):
-        # TODO: provide the sources in the kwargs
+    def __init__(self, begin_constraint_idx, end_constraint_idx, gap_idx, vocab_dict=None, **kwargs):
+        # TODO: provide the source indices in the kwargs (which idxs are the source, prefix, and suffix)
         # TODO: provide the GAP and CONSTRAINT token format in the kwargs -- let user specify what kind(s) of gaps and constraints are available to the model
         # the final sources are: ('source', 'source_mask', 'target', 'target_mask', 'target_prefix', 'target_prefix_mask', 'target_suffix', 'target_suffix_mask')
 
         # TODO: this transformer must know the indexes of the constraint and GAP tokens
+        # TODO: this will have to change when we support multiple constraints
         self.num_constraints = 1
-        self.begin_constraint_prefix = u'B-CONSTRAINT_'
-        self.end_constraint_prefix = u'E-CONSTRAINT_'
-        self.gap_prefix = u'GAP_' 
+        self.begin_constraint_idx = begin_constraint_idx
+        self.end_constraint_idx = end_constraint_idx
+        self.gap_idx = gap_idx
 
     def __call__(self, data, **kwargs):
         """
@@ -59,14 +60,12 @@ class SourceAndPrefixTransformer:
         target_prefix = data_image[2]
         target_suffix = data_image[3]
 
-        # WORKING: the implicit assumption is that we're going to totally discard the target_prefix -- all constraint information will be available via the attention only
+        # WORKING: the implicit assumption is that we're going to totally discard the target_prefix in the model -- all constraint information will be available via the attention only
         # WORKING: build the source + constraint representation
         # TODO: this transformer must know the indexes of the constraint and GAP tokens
-        #source = np.array(source + [begin_constraint_prefix + '0'] + target_prefix + [self.end_constraint_prefix + '0'] 
-        source = numpy.array(list(source) + [200] + list(target_prefix) + [201])
-        import ipdb; ipdb.set_trace()
-        # TODO: this transformer must know the indexes of the constraint and GAP tokens
-        target_suffix = numpy.array([100] + list(target_suffix))
+        #source = np.array(source + [begin_constraint_prefix + '0'] + target_prefix + [self.end_constraint_prefix + '0']
+        source = numpy.array(list(source) + [self.begin_constraint_idx] + list(target_prefix) + [self.end_constraint_idx])
+        target_suffix = numpy.array([self.gap_idx] + list(target_suffix))
         data_image[0] = source
         data_image[3] = target_suffix
 
@@ -417,11 +416,15 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
 
     # WORKING: Optionally use the source prefix transformer to create a stream for the constraint model
     # WORKING: whether to use this transformer depends upon configuration
-    stream = Mapping(stream, SourceAndPrefixTransformer())
-    e = stream.get_epoch_iterator()
-    t = e.next()
+    if kwargs.get('use_constraint_model', False):
+        begin_constraint_idx = src_vocab[kwargs['begin_constraint_token']]
+        end_constraint_idx = src_vocab[kwargs['end_constraint_token']]
+        gap_idx = trg_vocab[kwargs['output_gap_token']]
+        stream = Mapping(stream, SourceAndPrefixTransformer(begin_constraint_idx, end_constraint_idx, gap_idx))
 
-    import ipdb; ipdb.set_trace()
+        # e = stream.get_epoch_iterator()
+        # t = e.next()
+        # import ipdb; ipdb.set_trace()
 
     # Now make a very big batch that we can shuffle
     shuffle_batch_size = kwargs['shuffle_batch_size']

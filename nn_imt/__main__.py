@@ -54,7 +54,7 @@ if __name__ == "__main__":
         training_stream, src_vocab, trg_vocab = get_tr_stream_with_prefixes(**config_obj)
 
         # TODO: support both modes of creating validation data -- look at the config file to see which one to use
-        # WORKING: always use asynchronous validation
+        # TODO: we always use asynchronous validation now, so the dev stream isn't used
         dev_stream = get_dev_stream_with_prefix_file(**config_obj)
         #dev_stream = get_dev_stream_with_prefixes(**config_obj)
 

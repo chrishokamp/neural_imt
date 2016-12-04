@@ -23,9 +23,9 @@ from blocks.bricks.sequence_generators import (
     SequenceGenerator)
 from blocks.utils import pack
 from blocks.bricks.attention import AttentionRecurrent
-from blocks.bricks.recurrent.architectures import GatedRecurrent
 
-from machine_translation.model import (InitializableFeedforwardSequence, LookupFeedbackWMT15, GRUInitialState)
+from machine_translation.model import (InitializableFeedforwardSequence, LookupFeedbackWMT15,
+                                       GRUInitialState, GRUSpecialInitialState)
 from blocks.bricks.sequence_generators import BaseSequenceGenerator
 
 from attention import MultipleAttentionRecurrent
@@ -230,8 +230,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                 'outputs':  target_prefix[-1],
             }, glimpse_dict)
 
-	elif 'target_prefix' in kwargs and not kwargs.get('prefix_in_initial_state', True):
-	    # simply overwrite the dummy states from MultipleAttentionRecurrent
+        elif 'target_prefix' in kwargs and not kwargs.get('prefix_in_initial_state', True):
+            # simply overwrite the dummy states from MultipleAttentionRecurrent
             state_dict = dict(
                 self.transition.initial_states(
                     batch_size, as_dict=True, *args, **kwargs),
@@ -246,8 +246,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                 self.transition.initial_states(
                     batch_size, as_dict=True, *args, **kwargs),
                     outputs=self.readout.initial_outputs(batch_size))
-	    # TODO: another transition for YES glimpses NO prefix in internal state?
 
+        # TODO: another transition for YES glimpses NO prefix in internal state?
         # make a list of the initial states in the order required by self.generate
         return [state_dict[state_name]
                 for state_name in self.generate.states]
@@ -346,7 +346,12 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             # TODO: to compute the last word of the prefix
             # TODO: We can only get the initial glimpses for the original attention, not for all attentions
             prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
-            
+
+        # Optionally provide a special representation for the decoder initial states
+        initial_state_representation = None
+        if kwargs.get('initial_state_representation', None) is not None:
+            initial_state_representation = kwargs['initial_state_representation']
+
         # Now compute the suffix representation, and optionally use the prefix initial states to init the recurrent transition
         feedback = self.readout.feedback(outputs)
         inputs = self.fork.apply(feedback, as_dict=True)
@@ -357,6 +362,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             mask=mask, return_initial_states=True, as_dict=True,
             initial_states=prefix_initial_states,
             initial_glimpses=prefix_initial_glimpses,
+            initial_state_representation=initial_state_representation,
             additional_attention_in_internal_states=kwargs.get('additional_attention_in_internal_states', True),
             **dict_union(inputs, states, contexts))
 
@@ -906,7 +912,7 @@ class NMTPrefixDecoder(Initializable):
                  use_post_merge=True,
                  prefix_attention=False,
                  prefix_attention_in_readout=False,
-                 prefix_in_initial_state=True,
+                 use_initial_state_representation=False,
                  **kwargs):
 
         super(NMTPrefixDecoder, self).__init__(**kwargs)
@@ -917,19 +923,20 @@ class NMTPrefixDecoder(Initializable):
         self.theano_seed = theano_seed
 
         # Working: transition optionally initializes initial state from source end states (inspired by GNMT)
-        # Initialize GRU with special initial state
-        # WORKING: error here, we still want the AttentionRecurrent Transition
-        #if prefix_in_initial_state:
-        self.transition = GRUInitialState(
-            attended_dim=state_dim, dim=state_dim,
-            activation=Tanh(), name='decoder')
-        #else:
-        #    self.transition = GatedRecurrent(
-        #        dim=state_dim,
-        #        activation=Tanh(), name='decoder')
+        # Working: initial states of transition from _ANY_ representation -- i.e. target constraints
+        if use_initial_state_representation:
+            # Note: we assume that representation dim is the same as state_dim
+            # Note: default 'representation_name' kwarg in the transition is 'initial_state_representation'
+            self.transition = GRUSpecialInitialState(representation_dim=state_dim,
+                                                     dim=state_dim)
+        else:
+            # Initialize GRU with special initial state
+            self.transition = GRUInitialState(
+                attended_dim=state_dim, dim=state_dim,
+                activation=Tanh(), name='decoder')
 
         # Initialize the attention mechanism(s)
-        # WORKING: attentions go in a list, but the first one falls back to NIMT default behavior
+        # attentions go in a list, but the first one falls back to NIMT default behavior
         #  the prefix attention is only used in the _second_ recurrent transition of the decoder
         # this means that additional attentions need to be optional each time transition.apply is called
         if prefix_attention:
@@ -1049,7 +1056,7 @@ class NMTPrefixDecoder(Initializable):
     def cost(self, rep, source_sentence_mask, prefix_representation,
              target_sentence, target_sentence_mask, target_prefix, target_prefix_mask,
              additional_attention_in_internal_states=True,
-             prefix_in_initial_state=True):
+             prefix_in_initial_state=True, initial_state_representation=None):
 
         source_sentence_mask = source_sentence_mask.T
 
@@ -1064,18 +1071,25 @@ class NMTPrefixDecoder(Initializable):
             additional_attentions['attended_0'] = prefix_representation
             additional_attentions['attended_mask_0'] = target_prefix_mask
 
+        cost_kwargs = {
+            'mask': target_sentence_mask,
+            'outputs': target_sentence,
+            'prefix_mask': target_prefix_mask,
+            'prefix_outputs': target_prefix,
+            'attended': rep,
+            'attended_mask': source_sentence_mask,
+            'additional_attention_in_internal_states': additional_attention_in_internal_states,
+            'prefix_in_initial_state': prefix_in_initial_state
+        }
+
+        if initial_state_representation is not None:
+            cost_kwargs['initial_state_representation'] = initial_state_representation
+
+
         # Get the cost matrix
         # Note: there is a hard-coded dependency between the 'attended' kwarg and the 'attended' in the recurrent transition
         cost = self.sequence_generator.cost_matrix(**dict_union(
-            {
-              'mask': target_sentence_mask,
-              'outputs': target_sentence,
-              'prefix_mask': target_prefix_mask,
-              'prefix_outputs': target_prefix,
-              'attended': rep,
-              'attended_mask': source_sentence_mask,
-              'additional_attention_in_internal_states': additional_attention_in_internal_states
-            },
+            cost_kwargs,
             additional_attentions)
         )
 

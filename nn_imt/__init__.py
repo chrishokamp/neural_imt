@@ -63,10 +63,12 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
 
+
+    # WORKING: support _initialization only_ for the prefix representation
     target_prefix_representation = None
     prefix_encoder = None
     prefix_attention = False
-    if config.get('prefix_attention', False):
+    if config.get('prefix_attention', False) or config.get('initial_state_from_constraints', False):
         logger.info('Creating encoder for prefix attention')
         prefix_encoder = BidirectionalEncoder(
             config['trg_vocab_size'], config['enc_embed'], config['enc_nhids'], name='prefixencoder')
@@ -74,12 +76,20 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         prefix_attention = True
 
     prefix_in_initial_state = config.get('prefix_in_initial_state', True)
+    # option to use the prefix representation in create the decoder's initial states
+    use_initial_state_representation = False
+    initial_state_representation = None
+    if config.get('initial_state_from_constraints', False):
+        use_initial_state_representation = True
+        initial_state_representation=target_prefix_representation
+
+    # working: provide initial state representaion via kwargs in transition.apply
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
         config['enc_nhids'] * 2, loss_function='cross_entropy',
         prefix_attention=prefix_attention,
         prefix_attention_in_readout=config.get('prefix_attention_in_readout', False),
-	    prefix_in_initial_state=prefix_in_initial_state
+        use_initial_state_representation=use_initial_state_representation
     )
 
     # rename to match baseline NMT systems
@@ -93,7 +103,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         target_suffix, target_suffix_mask,
         target_prefix, target_prefix_mask,
         additional_attention_in_internal_states=additional_attn_over_internal_states,
-	    prefix_in_initial_state=prefix_in_initial_state
+        prefix_in_initial_state=prefix_in_initial_state,
+        initial_state_representation=initial_state_representation
     )
 
     logger.info('Creating computational graph')
@@ -298,13 +309,13 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
 # TODO: break this function into parts
 def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None, prefix_encoder=None,
-                                    prefix_attention=False):
+                                    prefix_attention=False, use_initial_state_representation=False):
 
     if encoder is None:
         encoder = BidirectionalEncoder(
             exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
 
-    if prefix_encoder is None and prefix_attention == True:
+    if prefix_encoder is None and (prefix_attention == True or use_initial_state_representation):
         prefix_encoder = BidirectionalEncoder(
             exp_config['trg_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'], name='prefixencoder')
 
@@ -313,8 +324,10 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     if decoder is None:
         decoder = NMTPrefixDecoder(
             exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
-            exp_config['enc_nhids'] * 2, loss_function='cross_entropy', prefix_attention=prefix_attention,
-            prefix_attention_in_readout=exp_config.get('prefix_attention_in_readout', False)
+            exp_config['enc_nhids'] * 2, loss_function='cross_entropy',
+            prefix_attention=prefix_attention,
+            prefix_attention_in_readout=exp_config.get('prefix_attention_in_readout', False),
+            use_initial_state_representation=use_initial_state_representation
         )
         # rename to match baseline NMT systems so that params can be transparently initialized
         decoder.name = 'decoder'
@@ -329,8 +342,10 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     sampling_representation = encoder.apply(sampling_input, tensor.ones(sampling_input.shape))
 
     prefix_representation = None
-    if prefix_attention:
+    initial_state_representation = None
+    if prefix_attention or use_initial_state_representation:
         prefix_representation = prefix_encoder.apply(sampling_prefix, tensor.ones(sampling_prefix.shape))
+        initial_state_representation = prefix_representation
 
     # Note: prefix can be empty if we want to simulate baseline NMT
     n_steps = exp_config.get('n_steps', None)
@@ -342,6 +357,7 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
                                  prefix_representation=prefix_representation,
                                  additional_attention_in_internal_states=additional_attn_over_internal_states,
                                  prefix_in_initial_state=prefix_in_initial_state,
+                                 initial_state_representation=initial_state_representation,
                                  n_steps=n_steps)
 
     # create the 1-step sampling graph

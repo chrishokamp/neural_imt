@@ -194,9 +194,10 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
     # Set up the sampling graph for validation during training
     # Theano variables for the sampling graph
-    sampling_vars = load_params_and_get_beam_search(config, encoder=encoder, decoder=decoder,
+    sampling_vars = load_params_and_get_beam_search(config, decoder=decoder, encoder=encoder,
+                                                    prefix_encoder=prefix_encoder,
                                                     prefix_attention=prefix_attention,
-                                                    prefix_encoder=prefix_encoder)
+                                                    use_initial_state_representation=use_initial_state_representation)
     beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
 
     # Note default sample output file

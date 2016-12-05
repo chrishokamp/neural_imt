@@ -65,13 +65,15 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
 
     # WORKING: support _initialization only_ for the prefix representation
-    target_prefix_representation = None
     prefix_encoder = None
     prefix_attention = config.get('prefix_attention', False)
     if prefix_attention or config.get('initial_state_from_constraints', False):
         logger.info('Creating encoder for prefix attention')
         prefix_encoder = BidirectionalEncoder(
             config['trg_vocab_size'], config['enc_embed'], config['enc_nhids'], name='prefixencoder')
+
+    target_prefix_representation = None
+    if prefix_attention:
         target_prefix_representation = prefix_encoder.apply(target_prefix, target_prefix_mask)
 
     prefix_in_initial_state = config.get('prefix_in_initial_state', True)
@@ -80,7 +82,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     initial_state_representation = None
     if config.get('initial_state_from_constraints', False):
         use_initial_state_representation = True
-        initial_state_representation=target_prefix_representation
+        initial_state_representation=prefix_encoder.apply(target_prefix, target_prefix_mask)
 
     # working: provide initial state representaion via kwargs in transition.apply
     decoder = NMTPrefixDecoder(
@@ -342,10 +344,11 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, bric
     sampling_representation = encoder.apply(sampling_input, tensor.ones(sampling_input.shape))
 
     prefix_representation = None
-    initial_state_representation = None
-    if prefix_attention or use_initial_state_representation:
+    if prefix_attention:
         prefix_representation = prefix_encoder.apply(sampling_prefix, tensor.ones(sampling_prefix.shape))
-        initial_state_representation = prefix_representation
+    initial_state_representation = None
+    if use_initial_state_representation:
+        initial_state_representation = prefix_encoder.apply(sampling_prefix, tensor.ones(sampling_prefix.shape))
 
     # Note: prefix can be empty if we want to simulate baseline NMT
     n_steps = exp_config.get('n_steps', None)

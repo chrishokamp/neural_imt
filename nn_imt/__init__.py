@@ -310,7 +310,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
 
 # TODO: break this function into parts
-def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, brick_delimiter=None, prefix_encoder=None,
+def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, prefix_encoder=None, brick_delimiter=None,
                                     prefix_attention=False, use_initial_state_representation=False):
 
     if encoder is None:
@@ -410,9 +410,11 @@ class IMTPredictor:
 
     def __init__(self, exp_config):
 
+        use_initial_state_representation = exp_config.get('initial_state_from_constraints', False)
         theano_variables = load_params_and_get_beam_search(exp_config,
                                                            brick_delimiter=exp_config.get('brick_delimiter', None),
-                                                           prefix_attention=exp_config.get('prefix_attention', False))
+                                                           prefix_attention=exp_config.get('prefix_attention', False),
+                                                           use_initial_state_representation=use_initial_state_representation)
         # beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
         self.beam_search, search_model, samples, self.source_sampling_input, self.target_sampling_input = theano_variables
 

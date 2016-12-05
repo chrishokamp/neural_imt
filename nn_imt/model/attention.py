@@ -279,6 +279,8 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
             kwargs.pop('initial_glimpses')
         if 'initial_states' in kwargs:
             kwargs.pop('initial_states')
+        if 'initial_state_representation' in kwargs:
+            kwargs.pop('initial_state_representation')
 
         update_inputs_with_additional_attention = kwargs.pop('additional_attention_in_internal_states', True)
 

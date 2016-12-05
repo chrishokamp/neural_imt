@@ -326,17 +326,17 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # masks in context are optional (e.g. `attended_mask`)
         contexts = dict_subset(kwargs, self._context_names, must_have=False)
 
-        # NOTE: we currently need to know beforehand which contexts are needed for the prefix transition, and which are needed for the decoder transition
-        prefix_context_names = ['attended', 'attended_mask']
-        prefix_contexts = dict_subset(contexts, prefix_context_names, must_have=True)
 
-        prefix_results = self.compute_states(prefix_outputs, mask=prefix_mask, **dict_union(states, prefix_contexts))
-
-        # Run the recurrent network for the output
+        # Optionally run the recurrent network for the prefix
         prefix_initial_states = None
         prefix_initial_glimpses = None
         prefix_in_initial_state = kwargs.get('prefix_in_initial_state', True)
         if prefix_in_initial_state:
+            # NOTE: we currently need to know beforehand which contexts are needed for the prefix transition, and which are needed for the decoder transition
+            prefix_context_names = ['attended', 'attended_mask']
+            prefix_contexts = dict_subset(contexts, prefix_context_names, must_have=True)
+            prefix_results = self.compute_states(prefix_outputs, mask=prefix_mask, **dict_union(states, prefix_contexts))
+
             prefix_initial_states = [prefix_results[name][-1] for name in self._state_names]
             # we need the initial glimpses for every attention brick
             # we can only init the initial glimpses for the prefix from the previous transition,

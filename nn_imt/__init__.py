@@ -67,13 +67,12 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # WORKING: support _initialization only_ for the prefix representation
     target_prefix_representation = None
     prefix_encoder = None
-    prefix_attention = False
-    if config.get('prefix_attention', False) or config.get('initial_state_from_constraints', False):
+    prefix_attention = config.get('prefix_attention', False)
+    if prefix_attention or config.get('initial_state_from_constraints', False):
         logger.info('Creating encoder for prefix attention')
         prefix_encoder = BidirectionalEncoder(
             config['trg_vocab_size'], config['enc_embed'], config['enc_nhids'], name='prefixencoder')
         target_prefix_representation = prefix_encoder.apply(target_prefix, target_prefix_mask)
-        prefix_attention = True
 
     prefix_in_initial_state = config.get('prefix_in_initial_state', True)
     # option to use the prefix representation in create the decoder's initial states

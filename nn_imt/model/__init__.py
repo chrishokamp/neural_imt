@@ -16,13 +16,13 @@ from blocks.bricks import (Tanh, Maxout, Linear, Logistic, FeedforwardSequence,
 from blocks.bricks.attention import SequenceContentAttention, AbstractAttentionRecurrent
 from blocks.bricks.base import application
 from blocks.bricks.lookup import LookupTable
-from blocks.bricks.parallel import Fork
+from blocks.bricks.parallel import Fork, Merge
 from blocks.bricks.recurrent import GatedRecurrent, Bidirectional
 from blocks.bricks.sequence_generators import (
     LookupFeedback, Readout, SoftmaxEmitter,
     SequenceGenerator)
 from blocks.utils import pack
-from blocks.bricks.attention import AttentionRecurrent
+
 
 from machine_translation.model import (InitializableFeedforwardSequence, LookupFeedbackWMT15,
                                        GRUInitialState, GRUSpecialInitialState)
@@ -52,7 +52,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     """
 
     def __init__(self, readout, transition, attentions,
-                 add_contexts=True, confidence_model=None, **kwargs):
+                 add_contexts=True, confidence_model=None, constraint_pointer_model=None, **kwargs):
         normal_inputs = [name for name in transition.apply.sequences
                          if 'mask' not in name]
         kwargs.setdefault('fork', Fork(normal_inputs))
@@ -60,6 +60,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         if type(attentions) is not list:
             attentions = [attentions]
         self.attentions = attentions
+        import ipdb; ipdb.set_trace()
 
         transition = InitialStateAttentionRecurrent(
             transition, attentions,
@@ -79,6 +80,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             self.children.append(self.confidence_model)
             self.children.append(self.softmax)
             self.children.append(self.logistic)
+
+        self.constraint_pointer_model = constraint_pointer_model
 
 
     @application
@@ -326,8 +329,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # masks in context are optional (e.g. `attended_mask`)
         contexts = dict_subset(kwargs, self._context_names, must_have=False)
 
-
-        # Optionally run the recurrent network for the prefix
+        # Optionally run the decoder recurrent network for the prefix
         prefix_initial_states = None
         prefix_initial_glimpses = None
         prefix_in_initial_state = kwargs.get('prefix_in_initial_state', True)
@@ -342,9 +344,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             # we can only init the initial glimpses for the prefix from the previous transition,
             # the initial glimpses for the additional attentions must be initialized from scratch (or use the prefix initial glimpse?)
             # NOTE: remember that the previous glimpses aren't actually used in our model anyway
-            # TODO: does this make sense for the initial glimpses? these are the glimpses we used
-            # TODO: to compute the last word of the prefix
-            # TODO: We can only get the initial glimpses for the original attention, not for all attentions
+            # NOTE: does this make sense for the initial glimpses? these are the glimpses we used to compute the last word of the prefix
             prefix_initial_glimpses = [prefix_results[name][-1] for name in self._glimpse_names]
 
         # Optionally provide a special representation for the decoder initial states
@@ -388,9 +388,77 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             feedback = tensor.set_subtensor(feedback[0],
                     self.readout.feedback(self.readout.initial_outputs(batch_size)))
 
-        readouts = self.readout.readout(
-            feedback=feedback, **dict_union(states, glimpses, contexts))
-        costs = self.readout.cost(readouts, outputs)
+        # WORKING: support optional pointer model
+        # WORKING: supervise pointer model over constraint representation
+        # WORKING: maintain coverage vector over (1) constraints (2) source
+        # WORKING: if constraints have wrapper tokens, coverage vector over these doesn't make sense, because we can't copy these (or can we?)
+
+        # WORKING: at each timestep, we want to choose whether to copy from the constraints or to generate a token
+        # WORKING: (1) query the gate -- p(pointer) for each timestep in each sequence
+        # WORKING: NOTE: we cannot backprop through argmax, so we need to do something else! -- argmax is only at prediction time
+        # WORKING: pointer model argmax indexes into the constraint sequence to give us the token we want
+        # WORKING: (2) weighted sum of pointer model + generation model
+        # TODO: this is a completely separate code path from the default -- cost, readouts, etc... will be different
+        # TODO: new theano variable for `model_choice_sequence`
+        if kwargs.get('model_choice_sequence', None) is not None and self.constraint_pointer_model is not None and False:
+            #import ipdb; ipdb.set_trace()
+            # WORKING: at each timestep, we want to choose between the generator and the pointer model
+            # WORKING: we make this choice by querying the pointer model
+            # query the model (call the Merge brick)
+            # Note: the constraint model could be called in the same way as the Readout brick, but typing out each kwarg makes things more explicit
+            # (time, batch, 2)
+            # WORKING: make sure the dims here are correct
+            model_gates = self.constraint_pointer_model.apply(**{
+                'states': states['states'],
+                'feedback': feedback,
+                'weighted_averages': glimpses['weighted_averages'],
+                'weighted_averages_0': glimpses['weighted_averages_0']
+            })
+            # WORKING: now map the model gates to 0 or 1, or use 2-dimensional output?
+            # now get the argmax of the pointer model at each time step -- TODO: the argmax is only used at prediction time
+            model_gates = self.softmax.apply(model_gates, extra_ndim=model_gates.ndim - 2)
+
+            # Note: here we must rely upon the combination of two indexes: one to let the model know that we're using the _pointer_
+            # Note: the other to specify _which_ item in the pointer index we're pointing to
+            # Note: the one-hot vectors for pointer model and generator have different lengths
+            # Note: as long as the indices are correct, this shouldn't be a problem
+
+            # the outputs of the attention model over the constraints
+            # Note: we assume that these weights were already masked correctly, so extra cells should have weight = 0
+            # Note: this masking should be handled by SequenceContentAttention
+            pointer_outputs = glimpses['weights_0']
+            generator_outputs = self.readout.readout(feedback=feedback, **dict_union(states, glimpses, contexts))
+
+            # Note that, in the general case, the "size" of the pointer outputs is _much_ smaller than the size of the output one-hots
+            # Note: this is because there are many more items in the target vocabulary than there are in the pointer attention output
+            # Note: one way around this would be to use zeros to extend the pointer weights to be the same size as the outputs
+            pointer_zeros = tensor.zeros_like(generator_outputs)
+            mapped_pointer_outputs = tensor.set_subtensor(pointer_zeros[:,:,:pointer_outputs.shape[2]], pointer_outputs)
+
+            # try to compute the two parts of the cost separately, then sum them together
+            pointer_costs = self.readout.cost(mapped_pointer_outputs, outputs).sum()
+            generator_costs = self.readout.cost(generator_outputs, outputs)
+
+            # supervision of model choice
+            model_choice_sequence = kwargs['model_choice_sequence']
+
+            # this is the 2-part cost function from Blunsom et al -- index which side to use by the supervised `model_choice_sequence`
+            # Note: at prediction time, we'll need to map from attention index to global index, but this isn't needed at training time
+            # Note: the global index is contained in the constraint sequence anyway -- this mapping is easy as long as we know which model we used
+            # indexes in model_choice_sequence -- pointer model = 1 generator = 0
+            generator_costs *= model_gates[:, :, 0]
+            pointer_costs *= model_gates[:, :, 1]
+            pointer_costs *= model_choice_sequence
+            generator_costs *= (1. - model_choice_sequence)
+            costs = pointer_costs + generator_costs
+
+
+        # default code path
+        else:
+            readouts = self.readout.readout(
+                feedback=feedback, **dict_union(states, glimpses, contexts))
+            costs = self.readout.cost(readouts, outputs)
+            import ipdb; ipdb.set_trace()
 
         # scale costs by position 
         # TODO: make this optional
@@ -400,7 +468,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         # scale costs by word position
         # costs *= position_coeffs
-        # WORKING: END scale costs by position
+        # END scale costs by position
 
         if mask is not None:
             costs *= mask
@@ -859,6 +927,7 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
         Allow user to either pass initial states, or pass through to default behavior
         """
         # WORKING: initial_glimpses can be a list
+        import ipdb; ipdb.set_trace()
         if kwargs.get('initial_states', None) is not None and kwargs.get('initial_glimpses', None) is not None:
             # Note: these states currently get popped out of AttentionRecurrent kwargs in the same way as mmmt
             # Note: the modification is in MultipleAttentionRecurrent.compute_states
@@ -882,6 +951,18 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
                               pack(additional_attention_initial_glimpses))
         else:
             initial_states = super(InitialStateAttentionRecurrent, self).initial_states(batch_size, **kwargs)
+            import ipdb; ipdb.set_trace()
+            if kwargs.get('attended_0', None) is not None:
+            # WORKING: BUG WHEN WE WANT TO USE DUAL ATTENTION FROM THE BEGINNING -- DIFFICULT TO KEEP BACK-COMPATIBLE
+            # [att_trans_initial_states_states, att_trans_initial_states_weighted_averages,
+            #  att_trans_initial_states_weights, att_trans_initial_states_weighted_averages_0,
+            #  att_trans_initial_states_weights_0]
+
+                # ['weighted_averages_0']\
+                weighted_avgs_0_init_state = tensor.zeros((kwargs['attended_0'].shape[1], kwargs['attended_0'].shape[-1]))
+                weights_0_init_state = tensor.zeros((kwargs['attended_0'].shape[1], kwargs['attended_0'].shape[0]))
+                initial_states[-2] = weighted_avgs_0_init_state
+                initial_states[-1] = weights_0_init_state
 
         # when special initial states aren't available, and we're not using the additional attention -- i.e. when computing the representation for the prefix, we need to return dummy initial states
         return initial_states
@@ -913,6 +994,7 @@ class NMTPrefixDecoder(Initializable):
                  prefix_attention=False,
                  prefix_attention_in_readout=False,
                  use_initial_state_representation=False,
+                 use_constraint_pointer_model=False,
                  **kwargs):
 
         super(NMTPrefixDecoder, self).__init__(**kwargs)
@@ -996,18 +1078,36 @@ class NMTPrefixDecoder(Initializable):
         # Initialize the readout, note that SoftmaxEmitter emits -1 for
         # initial outputs which is used by LookupFeedBackWMT15
 
-        # Chris: it's key that we're taking the first output of self.attention.take_glimpses.outputs
-        # Chris: the first output is the weighted avgs, the second is the weights in (batch, time)
+        # Note: it's key that we're taking the first output of self.attention.take_glimpses.outputs
+        # Note: the first output is the weighted avgs, the second is the weights in (batch, time)
         if type(self.attention) is list:
             attention_sources = []
             attention_sources.append(self.attention[0].take_glimpses.outputs[0])
             if prefix_attention_in_readout:
                 # Name is currently HACKED
-                # WORKING: SAME BUG WITH attention output names
+                # NOTE: SAME BUG WITH attention output names
                 attention_sources.append(self.attention[1].take_glimpses.outputs[0] + '_0')
-
         else:
             attention_sources = [self.attention.take_glimpses.outputs[0]]
+
+        # WORKING: add pointer model over the prefix representation
+        # WORKING: add input which maps from {index_in_sequence --> output_vocab_index}
+        # WORKING: add model to query the gate
+        # WORKING: inputs to gate = (source_attention, prefix_attention, h_t-1, o_t-1)
+        # TODO: what kwarg configuration is required to use the pointer model?
+        # TODO: different attention_sources for Readout and Pointer model
+        # TODO: input dims -- see Readout initialization in SequenceGenerator for how this is done
+        self.constraint_pointer_model = None
+        if use_constraint_pointer_model:
+            pointer_model_attention_sources = [self.attention[0].take_glimpses.outputs[0],
+                                               self.attention[1].take_glimpses.outputs[0] + '_0']
+            constraint_pointer_model = Merge(input_names=['states', 'feedback'] + pointer_model_attention_sources,
+                                             output_dim=2)
+            # see Merge brick docstring for why we set the bias in this way
+            constraint_pointer_model.children[0].use_bias = True
+            self.constraint_pointer_model = constraint_pointer_model
+
+        import ipdb; ipdb.set_trace()
 
         readout = Readout(
             source_names=['states', 'feedback'] + attention_sources,
@@ -1025,6 +1125,7 @@ class NMTPrefixDecoder(Initializable):
             # Note: it's the PartialSequenceGenerator which lets us condition upon the target prefix
             self.sequence_generator = PartialSequenceGenerator(
                 confidence_model=confidence_model,
+                constraint_pointer_model=self.constraint_pointer_model,
                 readout=readout,
                 transition=self.transition,
                 attentions=self.attention,
@@ -1049,6 +1150,17 @@ class NMTPrefixDecoder(Initializable):
             raise ValueError('The decoder does not support the loss function: {}'.format(loss_function))
 
         self.children = [self.sequence_generator]
+        if self.constraint_pointer_model is not None:
+            self.children.append(self.constraint_pointer_model)
+
+    def _push_allocation_config(self):
+        self.sequence_generator.push_allocation_config()
+        if self.constraint_pointer_model is not None:
+            # Note: this assumes that pointer model input names are exactly the same as Readout input names
+            # WORKING: HACK HACK -- setting the prefix attention dim to be the same as the source attention dim -- in general this isn't true
+            # self.constraint_pointer_model.input_dims = self.sequence_generator.readout.source_dims + self.sequence_generator.readout.source_dims[-1:]
+            self.constraint_pointer_model.input_dims = self.sequence_generator.readout.source_dims
+            self.constraint_pointer_model.push_allocation_config()
 
     # @application(inputs=['representation', 'prefix_representation', 'source_sentence_mask',
     #                     'target_sentence_mask', 'target_sentence', 'target_prefix_mask', 'target_prefix'],
@@ -1056,7 +1168,9 @@ class NMTPrefixDecoder(Initializable):
     def cost(self, rep, source_sentence_mask, prefix_representation,
              target_sentence, target_sentence_mask, target_prefix, target_prefix_mask,
              additional_attention_in_internal_states=True,
-             prefix_in_initial_state=True, initial_state_representation=None):
+             prefix_in_initial_state=True,
+             initial_state_representation=None,
+             model_choice_sequence=None):
 
         source_sentence_mask = source_sentence_mask.T
 
@@ -1085,6 +1199,11 @@ class NMTPrefixDecoder(Initializable):
         if initial_state_representation is not None:
             cost_kwargs['initial_state_representation'] = initial_state_representation
 
+        if model_choice_sequence is not None:
+            model_choice_sequence = model_choice_sequence.T
+            cost_kwargs['model_choice_sequence'] = model_choice_sequence
+
+        import ipdb; ipdb.set_trace()
 
         # Get the cost matrix
         # Note: there is a hard-coded dependency between the 'attended' kwarg and the 'attended' in the recurrent transition

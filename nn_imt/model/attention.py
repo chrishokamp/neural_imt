@@ -457,10 +457,10 @@ class MultipleAttentionRecurrent(AbstractAttentionRecurrent, Initializable):
         for attention, attended_name in zip(self.additional_attentions, self.additional_attended_names):
 
             # TODO: there is a bug here -- this section of the code fires when we have attentions without prefix initialization
-            #if attended_name in kwargs:
-            #    additional_initial_glimpses = attention.initial_glimpses(batch_size, kwargs[attended_name])
-            #    additional_initial_glimpses.extend(pack(additional_initial_glimpses))
-            #else:
+            # if attended_name in kwargs:
+            #     additional_initial_glimpses = attention.initial_glimpses(batch_size, kwargs[attended_name])
+            #     additional_initial_glimpses.extend(pack(additional_initial_glimpses))
+            # else:
             # Note: the dimensions still need to be the same as the dummy outputs from `take_glimpses`
             additional_initial_glimpses.extend(self.attention.initial_glimpses(batch_size, kwargs[self.attended_name]))
 

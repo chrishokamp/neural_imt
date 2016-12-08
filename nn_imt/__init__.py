@@ -58,13 +58,14 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     target_prefix = tensor.lmatrix('target_prefix')
     target_prefix_mask = tensor.matrix('target_prefix_mask')
 
+
     # Construct model
     logger.info('Building RNN encoder-decoder')
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
 
 
-    # WORKING: support _initialization only_ for the prefix representation
+    # support _decoder initialization only_ for the prefix representation
     prefix_encoder = None
     prefix_attention = config.get('prefix_attention', False)
     if prefix_attention or config.get('initial_state_from_constraints', False):
@@ -84,19 +85,27 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         use_initial_state_representation = True
         initial_state_representation=prefix_encoder.apply(target_prefix, target_prefix_mask)
 
-    # working: provide initial state representaion via kwargs in transition.apply
+    # WORKING: add pointer model over constraints
+    # WORKING: implement the constraint pointer model
+    use_constraint_pointer_model = config.get('use_constraint_pointer_model', False)
+    model_choice_sequence = None
+    if use_constraint_pointer_model:
+        model_choice_sequence = tensor.matrix('model_choice_sequence')
+
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
         config['enc_nhids'] * 2, loss_function='cross_entropy',
         prefix_attention=prefix_attention,
         prefix_attention_in_readout=config.get('prefix_attention_in_readout', False),
-        use_initial_state_representation=use_initial_state_representation
+        use_initial_state_representation=use_initial_state_representation,
+        use_constraint_pointer_model=use_constraint_pointer_model
     )
 
     # rename to match baseline NMT systems
     decoder.name = 'decoder'
 
     additional_attn_over_internal_states = config.get('distribute_prefix_attention_over_inputs', True)
+    import ipdb; ipdb.set_trace()
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask,
@@ -105,7 +114,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         target_prefix, target_prefix_mask,
         additional_attention_in_internal_states=additional_attn_over_internal_states,
         prefix_in_initial_state=prefix_in_initial_state,
-        initial_state_representation=initial_state_representation
+        initial_state_representation=initial_state_representation,
+        model_choice_sequence=model_choice_sequence
     )
 
     logger.info('Creating computational graph')
@@ -131,6 +141,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     decoder.push_initialization_config()
     decoder.transition.weights_init = Orthogonal()
     decoder.initialize()
+
+    #import ipdb; ipdb.set_trace()
 
     # apply dropout for regularization
     if config['dropout'] < 1.0:
@@ -258,6 +270,7 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     logger.info("Initializing training algorithm")
 
     # if there is dropout or random noise, we need to use the output of the modified graph
+    print(trainable_params)
     if config['dropout'] < 1.0 or config['weight_noise_ff'] > 0.0:
        algorithm = GradientDescent(
            cost=cg.outputs[0], parameters=trainable_params,

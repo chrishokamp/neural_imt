@@ -20,10 +20,123 @@ def _length(sentence_pair):
     """Assumes suffix is the fourth element in the tuple."""
     return len(sentence_pair[3])
 
-# WORKING: add a transformer to concat source + <B-CONSTRAINT_i> target <E-CONSTRAINT_i>
-# WORKING: take two sources and merge them into a single source, or add a new source(?)
-# WORKING: tokens for B-CONSTRAINT_i and E-CONSTRAINT_i up to N constraints
-# WORKING: PLACEHOLDER-i for target tokens corresponding to *-CONSTRAINT-i tokens
+
+# WORKING: transformer which takes source + target, and adds `constraints` `constraints_mask`, `model_choice_sequence`
+# WORKING: note that this transformer expects the _FULL_ target as reference, not just the suffix
+# WORKING: note that model choice sequence needs to be padded with 0, not `EOS`, because this is a sequence of ints
+# WORKING: to start, we can just hack the prefix transformer and add the `model_choice_sequence` as well
+class ConstraintModelStreamTransformer:
+    """
+    Takes a stream of (source, target) and adds the sources ('suffixes', 'prefixes', model_choice_sequence),
+
+    Note: TODO: currently the source names are hacked for convenience, later we will generalize this
+    #Takes a stream of (source, target) and adds the sources ('constraints', 'model_choice_sequence'),
+
+
+    Parameters
+    ----------
+
+
+    Notes
+    -----
+    At call time, we expect a stream providing (sources, references) -- i.e. something like a TextFile object
+
+    In the future, we may want to randomly provide _some_ of the prefix/suffix pairs for a target sequence, but not
+    all of them, this would require initializing the transformer with some params.
+
+    Note that we also need to duplicate the source and target the required number of times (this depends upon
+    the length of the target sequence). Currently this is accomplished in a separate transformer
+    """
+
+    def __init__(self, **kwargs):
+        self.sample_ratio = kwargs.get('sample_ratio', 1.)
+        # TODO: add the ability to always generate the same samples by resetting the seed
+        assert self.sample_ratio > 0. and self.sample_ratio <= 1., '0. < sample_ratio <= 1.'
+
+        # only sample suffixes above a certain length
+        self.min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None)
+        if self.min_suffix_source_ratio is not None:
+            assert self.min_suffix_source_ratio > 0. and self.min_suffix_source_ratio <= 1., '0. < min_suffix_source_ratio <= 1.'
+
+        self.random_seed = kwargs.get('random_seed', 42)
+        self.random_state = numpy.random.RandomState(self.random_seed)
+
+        # whether we should always generate the same samples
+        # TODO: there is an error in the logic here, see below
+        self.static_samples = kwargs.get('static_samples', False)
+        self.do_not_expand = kwargs.get('nmt_baseline_training', False)
+
+
+    # TODO: reset `suffix` to the full target sequence -- optionally with special tokens inserted
+    def __call__(self, data, **kwargs):
+        source = data[0]
+        reference = data[1]
+
+        # TODO: this is only a placeholder for the full constraint generation routine
+        sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference,
+                                                                                 bos_token=True,
+                                                                                 eos_token=True,
+                                                                                 **kwargs))
+
+        # TODO: HACK here -- pairs should be pre-filtered so that the ratio cannot be crazy skewed
+        if self.min_suffix_source_ratio is not None and (float(len(reference)) / float(len(source))) >= 0.8:
+            source_len = float(len(sources[0]))
+            good_idxs = [idx for idx, seq in enumerate(target_suffixes)
+                         if (float(len(seq)) / source_len) >= self.min_suffix_source_ratio]
+
+            sources = [sources[idx] for idx in good_idxs]
+            target_prefixes = [target_prefixes[idx] for idx in good_idxs]
+            target_suffixes = [target_suffixes[idx] for idx in good_idxs]
+            if len(good_idxs) == 0:
+                import ipdb; ipdb.set_trace()
+
+
+        if self.sample_ratio < 1.:
+            num_samples = int(numpy.ceil(self.sample_ratio * len(target_prefixes)))
+            sample_idxs = self.random_state.choice(range(len(target_prefixes)), num_samples)
+        else:
+            sample_idxs = range(len(target_prefixes))
+
+        # TODO: this should be done before expansion to save computation
+        if self.do_not_expand:
+            sample_idxs=[0]
+
+        logging.info('Generating {} samples, overall len is {}'.format(len(sample_idxs), len(target_prefixes)))
+
+        # Note: the cast here is important, otherwise these will become float64s which will break everything
+        target_prefixes = list(numpy.array([numpy.array(pre).astype('int64') for pre in target_prefixes])[sample_idxs])
+        target_suffixes = list(numpy.array([numpy.array(suf).astype('int64') for suf in target_suffixes])[sample_idxs])
+
+        # WORKING: HACKED to create constraints, refs, and model choice sequence
+        # build the model choice sequence
+        prefix_lens = [len(p) for p in target_prefixes]
+        suffix_lens = [len(s) for s in target_suffixes]
+        # 0 is the generator model, 1 is the pointer model
+        model_choice_sequence = [numpy.array(([1.] * len_p) + ([0.] * len_s), dtype='float32')
+                                 for len_p, len_s in zip(prefix_lens, suffix_lens)]
+
+        # just repeat the reference the required number of times
+        repeated_references = [reference for _ in target_suffixes]
+
+        #if user wants static samples, reset the random state so that the samples will be the same next time around
+        # TODO: this won't work, we actually want to reset it after a complete epoch
+        # TODO: check calls to reset()? possibly overload that
+        if self.static_samples == True:
+            self.random_state = numpy.random.RandomState(self.random_seed)
+
+        # WORKING HERE: runtime bug in shapes
+        print([(k,[len(a) for a in s]) for k,s in zip(['target_prefixes', 'target_suffixes', 'model_choice_sequence'],
+                                                      [target_prefixes, repeated_references, model_choice_sequence])])
+
+        import ipdb; ipdb.set_trace()
+
+        return (target_prefixes, repeated_references, model_choice_sequence)
+
+
+# adds a transformer to concat source + <B-CONSTRAINT_i> target <E-CONSTRAINT_i>
+# TODO: tokens for B-CONSTRAINT_i and E-CONSTRAINT_i up to N constraints
+# TODO: PLACEHOLDER-i for target tokens corresponding to *-CONSTRAINT-i tokens
+# TODO: rename to "Concat source and prefix transformer"
 class SourceAndPrefixTransformer:
     """
     Takes a stream of <FILL IN ALL SOURCES> and adds the source: `source_with_constraints`
@@ -400,12 +513,25 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
                                  trg_vocab_size=trg_vocab_size,
                                  unk_id=unk_id))
 
-    stream = Mapping(stream,
-                     PrefixSuffixStreamTransformer(
-                         sample_ratio=kwargs.get('train_sample_ratio', 1.),
-                         min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None),
-                         nmt_baseline_training = kwargs.get('nmt_baseline_training', False)),
-                     add_sources=('target_prefix', 'target_suffix'))
+    use_constraint_pointer_model = kwargs.get('use_constraint_pointer_model', False)
+
+    if use_constraint_pointer_model:
+        logger.info('Using constraint pointer model datastream')
+        stream = Mapping(stream,
+                         ConstraintModelStreamTransformer(
+                             sample_ratio=kwargs.get('train_sample_ratio', 1.),
+                             min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None),
+                             nmt_baseline_training = kwargs.get('nmt_baseline_training', False)),
+                         add_sources=('target_prefix', 'target_suffix', 'model_choice_sequence'))
+
+    else:
+        print('Using default prefix IMT datastream')
+        stream = Mapping(stream,
+                         PrefixSuffixStreamTransformer(
+                             sample_ratio=kwargs.get('train_sample_ratio', 1.),
+                             min_suffix_source_ratio = kwargs.get('min_suffix_source_ratio', None),
+                             nmt_baseline_training = kwargs.get('nmt_baseline_training', False)),
+                         add_sources=('target_prefix', 'target_suffix'))
 
     stream = Mapping(stream, CopySourceAndTargetToMatchPrefixes(stream))
 
@@ -458,11 +584,17 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
         'suffix_length': kwargs.get('suffix_length', None),
         'truncate_sources': kwargs.get('truncate_sources', [])
     }
+    mask_sources = ('source', 'target', 'target_prefix', 'target_suffix')
+    padding_symbols = [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1]
+    # TODO: Model choice sequece actually doesn't need to be masked??
+    if use_constraint_pointer_model:
+        mask_sources = mask_sources + ('model_choice_sequence',)
+        # we pad the model choice sequence with 0
+        padding_symbols.append(0)
+
     logger.info('Training suffix length is: {}'.format(configurable_padding_args['suffix_length']))
     logger.info('I will mask the following sources after <suffix_length>: {}'.format(configurable_padding_args['truncate_sources']))
-    masked_stream = PaddingWithEOS(
-        stream, [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1],
-        mask_sources=('source', 'target', 'target_prefix', 'target_suffix'), **configurable_padding_args)
+    masked_stream = PaddingWithEOS(stream, padding_symbols, mask_sources=mask_sources, **configurable_padding_args)
 
     return masked_stream, src_vocab, trg_vocab
 

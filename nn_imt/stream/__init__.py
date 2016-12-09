@@ -118,6 +118,21 @@ class ConstraintModelStreamTransformer:
         # just repeat the reference the required number of times
         repeated_references = [reference for _ in target_suffixes]
 
+	# now map the constraint model indices in the references to their pointer model indices
+	# Note that we _must_ know the indices of the constraints in the reference
+	mapped_references = []
+	for constraint_seq, constraint_len, ref_seq in zip(target_prefixes, prefix_lens, repeated_references):
+            #import ipdb; ipdb.set_trace()
+	    try:
+	        assert tuple(constraint_seq) == tuple(ref_seq[:constraint_len]), 'the reference indices must match the constraint indices'
+	    except:
+                import ipdb; ipdb.set_trace()
+	    # map the constraint indices to pointer indices
+	    # TODO: this is a hack that we can only do with prefix constraints
+	    mapped_ref = list(ref_seq)
+	    mapped_ref[:constraint_len] = range(constraint_len)
+	    mapped_references.append(mapped_ref)
+
         #if user wants static samples, reset the random state so that the samples will be the same next time around
         # TODO: this won't work, we actually want to reset it after a complete epoch
         # TODO: check calls to reset()? possibly overload that
@@ -125,12 +140,10 @@ class ConstraintModelStreamTransformer:
             self.random_state = numpy.random.RandomState(self.random_seed)
 
         # WORKING HERE: runtime bug in shapes
-        print([(k,[len(a) for a in s]) for k,s in zip(['target_prefixes', 'target_suffixes', 'model_choice_sequence'],
-                                                      [target_prefixes, repeated_references, model_choice_sequence])])
+        #print([(k,[len(a) for a in s]) for k,s in zip(['target_prefixes', 'target_suffixes', 'model_choice_sequence'],
+        #                                              [target_prefixes, repeated_references, model_choice_sequence])])
 
-        import ipdb; ipdb.set_trace()
-
-        return (target_prefixes, repeated_references, model_choice_sequence)
+        return (target_prefixes, mapped_references, model_choice_sequence)
 
 
 # adds a transformer to concat source + <B-CONSTRAINT_i> target <E-CONSTRAINT_i>
@@ -602,7 +615,7 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
 # # Remember that the BleuValidator does hackish stuff to get target set information from the main_loop data_stream
 # # using all kwargs here makes it more clear that this function is always called with get_dev_stream(**config_dict)
 def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab=None, src_vocab_size=30000,
-                                 trg_vocab=None, trg_vocab_size=30000, unk_id=1, return_vocab=False, **kwargs):
+                                 trg_vocab=None, trg_vocab_size=30000, unk_id=1, return_vocab=False, use_constraint_pointer_model=False, **kwargs):
     """Setup development set stream if necessary."""
 
     dev_stream = None
@@ -631,8 +644,12 @@ def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab
                            ('source', 'target'))
 
         # now add prefix and suffixes to this stream
-        dev_stream = Mapping(dev_stream, PrefixSuffixStreamTransformer(sample_ratio=kwargs.get('dev_sample_ratio', 1.)),
-                             add_sources=('target_prefix', 'target_suffix'))
+	if use_constraint_pointer_model:
+            dev_stream = Mapping(dev_stream, ConstraintModelStreamTransformer(sample_ratio=kwargs.get('dev_sample_ratio', 1.)),
+                                 add_sources=('target_prefix', 'target_suffix', 'model_choice_sequence'))
+	else:
+            dev_stream = Mapping(dev_stream, PrefixSuffixStreamTransformer(sample_ratio=kwargs.get('dev_sample_ratio', 1.)),
+                                 add_sources=('target_prefix', 'target_suffix'))
 
         dev_stream = Mapping(dev_stream, CopySourceAndTargetToMatchPrefixes(dev_stream))
 

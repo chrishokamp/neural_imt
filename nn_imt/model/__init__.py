@@ -60,7 +60,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         if type(attentions) is not list:
             attentions = [attentions]
         self.attentions = attentions
-        import ipdb; ipdb.set_trace()
 
         transition = InitialStateAttentionRecurrent(
             transition, attentions,
@@ -92,6 +91,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     def generate(self, outputs, **kwargs):
         """A sequence generation step.
 
+        Note: At prediction time, this method gets called, then VariableFilter gets the outputs for beam search
+
         Parameters
         ----------
         outputs : :class:`~tensor.TensorVariable`
@@ -104,25 +105,73 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         """
 
-
         states = dict_subset(kwargs, self._state_names)
         # masks in context are optional (e.g. `attended_mask`)
         contexts = dict_subset(kwargs, self._context_names, must_have=False)
         glimpses = dict_subset(kwargs, self._glimpse_names)
         # WORKING: do we have _all_ of the glimpse names here?
 
-        # WORKING: where there are multiple glimpses, we need to compute them all, and provide them all to the next time step
-        # WORKING: this method gets called, then VariableFilter gets the outputs for beam search
-        # WORKING: glimpses is a list len(glimpses) % 2 = 0
+        # Note: where there are multiple glimpses, we need to compute them all, and provide them all to the next time step
+        # glimpses is a list len(glimpses) % 2 = 0
         use_additional_attention = kwargs.get('use_additional_attention', False)
         update_inputs_with_additional_attention = kwargs.pop('additional_attention_in_internal_states', True)
 
         next_glimpses = self.transition.take_glimpses(
             as_dict=True, use_additional_attention=use_additional_attention, **dict_union(states, glimpses, contexts))
-        next_readouts = self.readout.readout(
-            feedback=self.readout.feedback(outputs),
-            **dict_union(states, next_glimpses, contexts))
-        next_outputs = self.readout.emit(next_readouts)
+
+        # WORKING: if pointer model is enabled, here we choose between the models by doing an argmax over the gates
+        # WORKING: get the output of the model
+        # WORKING: if the chosen model was the pointer, map through the attended constraints sequence to get the actual word index
+
+        if self.constraint_pointer_model is not None:
+
+            # compute the model gates
+            model_gates = self.constraint_pointer_model.apply(**{
+                'states': states['states'],
+                'feedback': self.readout.feedback(outputs),
+                'weighted_averages': next_glimpses['weighted_averages'],
+                'weighted_averages_0': next_glimpses['weighted_averages_0']
+            })
+
+            # compute the outputs of both models, stack them together, then use the model gates to select which one to use
+
+            # generator model index = 0 pointer model index = 1
+            # each batch item now contains 1 or 0
+            model_choice = model_gates.argmax(axis=-1)
+
+            # For the ones that came from the pointer model, we need to map the pointer indices to the global indices
+            # TODO: rename 'target_prefix' to 'target_constraints'
+            # TODO: map attention pointers to actual indices -- HOW TO DO THE MULTIDIMENSIONAL INDEXING
+            target_prefix = kwargs['target_prefix']
+            target_prefix_shape = target_prefix.shape
+            # start stop step dtype
+            # TODO: verify that offsets are correct
+            pointer_offsets = tensor.arange(0, target_prefix_shape[0]*target_prefix_shape[1], target_prefix_shape[1])
+            pointer_readouts = glimpses['weights_0']
+            pointer_attention_indices = pointer_readouts.argmax(-1).flatten() + pointer_offsets
+            pointer_outputs = target_prefix.flatten()[pointer_attention_indices]
+
+            generator_readouts = self.readout.readout(feedback=self.readout.feedback(outputs),
+                                                      **dict_union(states, next_glimpses, contexts))
+            generator_outputs = self.readout.emit(generator_readouts)
+            # generator model index = 0 pointer model index = 1
+            # WORKING: hackish way to combine two models outputs by summing
+            pointer_outputs *= model_choice
+            generator_outputs *= (1 - model_choice)
+            # output_candidates = tensor.concatenate([generator_outputs, pointer_outputs], axis=-1)
+            next_outputs = pointer_outputs + generator_outputs
+
+            # WORKING: zero out readouts of both models to combine
+            pointer_readouts *= model_gates
+            generator_readouts *= (1 - model_gates)
+            next_readouts = pointer_readouts + generator_readouts
+        else:
+            next_readouts = self.readout.readout(
+                feedback=self.readout.feedback(outputs),
+                **dict_union(states, next_glimpses, contexts))
+
+            next_outputs = self.readout.emit(next_readouts)
+
         next_costs = self.readout.cost(next_readouts, next_outputs)
         next_feedback = self.readout.feedback(next_outputs)
         next_inputs = (self.fork.apply(next_feedback, as_dict=True)
@@ -132,10 +181,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             additional_attention_in_internal_states=update_inputs_with_additional_attention,
             **dict_union(next_inputs, states, next_glimpses, contexts))
 
-        # TODO: switch to directly getting the probs from softmax
         next_probs = self.softmax.apply(next_readouts)
 
-        # WORKING: switch from merged_states to final_states
+        # TODO: switch from merged_states to final_states
         # also query the confidence model
         #next_merged_states = self.readout.merged_states(
         #    feedback=self.readout.feedback(outputs),
@@ -353,11 +401,18 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             initial_state_representation = kwargs['initial_state_representation']
 
         # Now compute the suffix representation, and optionally use the prefix initial states to init the recurrent transition
-        feedback = self.readout.feedback(outputs)
+        # Note: if we're using the pointer model, we need to compute the feedback from the true outputs
+        # Note: this is equivalent to the true target sequence
+        if kwargs.get('true_feedback', None) is not None:
+            feedback = self.readout.feedback(kwargs['true_feedback'])
+        else:
+            feedback = self.readout.feedback(outputs)
+
         inputs = self.fork.apply(feedback, as_dict=True)
         # this creates a second transition which includes attention over the prefix states
         # this transition can only be trained ("tuned" for IMT) -- baseline is the transition without multiple attentions
         # (some of) the pre-trained parameters can optionally be held static
+
         results = self.transition.apply(
             mask=mask, return_initial_states=True, as_dict=True,
             initial_states=prefix_initial_states,
@@ -374,13 +429,11 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         states = {name: results[name][:-1] for name in self._state_names}
         glimpses = {name: results[name][1:] for name in self._glimpse_names}
 
-        # Compute the cost
-        # Note: setting the first element of feedback to the last feedback of the prefix
-
         feedback = tensor.roll(feedback, 1, 0)
 
         if prefix_in_initial_state:
-            # note that we subtract 1 from the summed mask to get the correct index
+            # Note: setting the first element of feedback to the last feedback of the prefix
+            # Note that we subtract 1 from the summed mask to get the correct index
             # the intuition is that we need to set the feedback to the last _real_ input of the prefix -- ie sum mask to get the real lengths and select the final feedback
             feedback = tensor.set_subtensor(feedback[0],
                    prefix_feedback[prefix_mask.sum(axis=0).astype('int16')-1, tensor.arange(batch_size), :])
@@ -388,26 +441,22 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             feedback = tensor.set_subtensor(feedback[0],
                     self.readout.feedback(self.readout.initial_outputs(batch_size)))
 
-        # WORKING: support optional pointer model
-        # WORKING: supervise pointer model over constraint representation
         # WORKING: maintain coverage vector over (1) constraints (2) source
         # WORKING: if constraints have wrapper tokens, coverage vector over these doesn't make sense, because we can't copy these (or can we?)
-
         # WORKING: at each timestep, we want to choose whether to copy from the constraints or to generate a token
         # WORKING: (1) query the gate -- p(pointer) for each timestep in each sequence
         # WORKING: NOTE: we cannot backprop through argmax, so we need to do something else! -- argmax is only at prediction time
         # WORKING: pointer model argmax indexes into the constraint sequence to give us the token we want
         # WORKING: (2) weighted sum of pointer model + generation model
-        # TODO: this is a completely separate code path from the default -- cost, readouts, etc... will be different
-        # TODO: new theano variable for `model_choice_sequence`
-        if kwargs.get('model_choice_sequence', None) is not None and self.constraint_pointer_model is not None and False:
-            #import ipdb; ipdb.set_trace()
+        # code path for pointer model over constraints
+        if kwargs.get('model_choice_sequence', None) is not None and self.constraint_pointer_model is not None:
             # WORKING: at each timestep, we want to choose between the generator and the pointer model
             # WORKING: we make this choice by querying the pointer model
             # query the model (call the Merge brick)
+
             # Note: the constraint model could be called in the same way as the Readout brick, but typing out each kwarg makes things more explicit
             # (time, batch, 2)
-            # WORKING: make sure the dims here are correct
+            # WORKING: MAKE SURE THE REPRESENTATION IS ACTUALLY IN THE RECURRENT TRANSITION
             model_gates = self.constraint_pointer_model.apply(**{
                 'states': states['states'],
                 'feedback': feedback,
@@ -436,7 +485,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             mapped_pointer_outputs = tensor.set_subtensor(pointer_zeros[:,:,:pointer_outputs.shape[2]], pointer_outputs)
 
             # try to compute the two parts of the cost separately, then sum them together
-            pointer_costs = self.readout.cost(mapped_pointer_outputs, outputs).sum()
+            pointer_costs = self.readout.cost(mapped_pointer_outputs, outputs)
             generator_costs = self.readout.cost(generator_outputs, outputs)
 
             # supervision of model choice
@@ -451,14 +500,13 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             pointer_costs *= model_choice_sequence
             generator_costs *= (1. - model_choice_sequence)
             costs = pointer_costs + generator_costs
-
+            costs += self.readout.cost(model_gates, model_choice_sequence.astype('int64'))
 
         # default code path
         else:
             readouts = self.readout.readout(
                 feedback=feedback, **dict_union(states, glimpses, contexts))
             costs = self.readout.cost(readouts, outputs)
-            import ipdb; ipdb.set_trace()
 
         # scale costs by position 
         # TODO: make this optional
@@ -926,8 +974,7 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
         """
         Allow user to either pass initial states, or pass through to default behavior
         """
-        # WORKING: initial_glimpses can be a list
-        import ipdb; ipdb.set_trace()
+
         if kwargs.get('initial_states', None) is not None and kwargs.get('initial_glimpses', None) is not None:
             # Note: these states currently get popped out of AttentionRecurrent kwargs in the same way as mmmt
             # Note: the modification is in MultipleAttentionRecurrent.compute_states
@@ -951,7 +998,6 @@ class InitialStateAttentionRecurrent(MultipleAttentionRecurrent):
                               pack(additional_attention_initial_glimpses))
         else:
             initial_states = super(InitialStateAttentionRecurrent, self).initial_states(batch_size, **kwargs)
-            import ipdb; ipdb.set_trace()
             if kwargs.get('attended_0', None) is not None:
             # WORKING: BUG WHEN WE WANT TO USE DUAL ATTENTION FROM THE BEGINNING -- DIFFICULT TO KEEP BACK-COMPATIBLE
             # [att_trans_initial_states_states, att_trans_initial_states_weighted_averages,
@@ -1107,8 +1153,6 @@ class NMTPrefixDecoder(Initializable):
             constraint_pointer_model.children[0].use_bias = True
             self.constraint_pointer_model = constraint_pointer_model
 
-        import ipdb; ipdb.set_trace()
-
         readout = Readout(
             source_names=['states', 'feedback'] + attention_sources,
             readout_dim=self.vocab_size,
@@ -1158,8 +1202,8 @@ class NMTPrefixDecoder(Initializable):
         if self.constraint_pointer_model is not None:
             # Note: this assumes that pointer model input names are exactly the same as Readout input names
             # WORKING: HACK HACK -- setting the prefix attention dim to be the same as the source attention dim -- in general this isn't true
-            # self.constraint_pointer_model.input_dims = self.sequence_generator.readout.source_dims + self.sequence_generator.readout.source_dims[-1:]
-            self.constraint_pointer_model.input_dims = self.sequence_generator.readout.source_dims
+            self.constraint_pointer_model.input_dims = self.sequence_generator.readout.source_dims + self.sequence_generator.readout.source_dims[-1:]
+            #self.constraint_pointer_model.input_dims = self.sequence_generator.readout.source_dims
             self.constraint_pointer_model.push_allocation_config()
 
     # @application(inputs=['representation', 'prefix_representation', 'source_sentence_mask',
@@ -1170,7 +1214,8 @@ class NMTPrefixDecoder(Initializable):
              additional_attention_in_internal_states=True,
              prefix_in_initial_state=True,
              initial_state_representation=None,
-             model_choice_sequence=None):
+             model_choice_sequence=None,
+             true_target=None):
 
         source_sentence_mask = source_sentence_mask.T
 
@@ -1202,8 +1247,7 @@ class NMTPrefixDecoder(Initializable):
         if model_choice_sequence is not None:
             model_choice_sequence = model_choice_sequence.T
             cost_kwargs['model_choice_sequence'] = model_choice_sequence
-
-        import ipdb; ipdb.set_trace()
+            cost_kwargs['true_target'] = true_target.T
 
         # Get the cost matrix
         # Note: there is a hard-coded dependency between the 'attended' kwarg and the 'attended' in the recurrent transition

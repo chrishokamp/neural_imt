@@ -115,8 +115,10 @@ class BeamSearch(object):
         next_outputs = VariableFilter(
             applications=[self.generator.readout.emit], roles=[OUTPUT])(
                 self.inner_cg.variables)
+        #self.next_state_computer = function(
+        #    self.contexts + self.input_states + next_outputs, next_states)
         self.next_state_computer = function(
-            self.contexts + self.input_states + next_outputs, next_states)
+            self.inputs + self.contexts + self.input_states + next_outputs, next_states, on_unused_input='warn')
 
     def _compile_logprobs_computer(self):
         # This filtering should return identical variables
@@ -131,9 +133,7 @@ class BeamSearch(object):
             self.contexts + self.input_states, logprobs,
             on_unused_input='ignore')
 
-    # WORKING: how to get confidence as a dummy variable?
-    # IDEA: create any functions which need to be called at each step, and add them to a list of auxilliary beam search functions
-    # IDEA: add to states, or compile a separate function that passes along whatever dummy outputs together with beam search
+    # get confidences during the beam search
     def _compile_confidence_computer(self):
         """get the output of the confidence model for a timestep"""
         merged_state_filter = VariableFilter(
@@ -142,7 +142,7 @@ class BeamSearch(object):
 
         word_confidence = merged_state_filter(self.inner_cg)[0]
         self.confidence_computer = function(
-            self.contexts + self.input_states, word_confidence,
+            self.inputs + self.contexts + self.input_states, word_confidence,
             on_unused_input='ignore')
 
     def compile(self):
@@ -199,7 +199,7 @@ class BeamSearch(object):
         return self.logprobs_computer(*(list(contexts.values()) +
                                       input_states))
 
-    def compute_confidences(self, contexts, states):
+    def compute_confidences(self, inputs, contexts, states):
         """Compute model confidence at this timestep
 
         Parameters
@@ -215,11 +215,12 @@ class BeamSearch(object):
         about its prediction for each beam entry at this timestep
 
         """
+        inputs = [inputs[var] for var in self.inputs]
         input_states = [states[name] for name in self.input_state_names]
-        return self.confidence_computer(*(list(contexts.values()) +
+        return self.confidence_computer(*(inputs + list(contexts.values()) +
                                         input_states))
 
-    def compute_next_states(self, contexts, states, outputs):
+    def compute_next_states(self, inputs, contexts, states, outputs):
         """Computes next states.
 
         Parameters
@@ -236,8 +237,11 @@ class BeamSearch(object):
         A {name: numpy.array} dictionary of next states.
 
         """
+        inputs = [inputs[var] for var in self.inputs]
         input_states = [states[name] for name in self.input_state_names]
-        next_values = self.next_state_computer(*(list(contexts.values()) +
+
+	# TODO: is the order of contexts correct here -- how can we be sure??
+        next_values = self.next_state_computer(*(inputs + list(contexts.values()) +
                                                  input_states + [outputs]))
         return OrderedDict(equizip(self.state_names, next_values))
 
@@ -366,11 +370,11 @@ class BeamSearch(object):
             all_glimpses = numpy.vstack([all_glimpses, ordered_glimpses])
 
             # Note that confidences are already in sorted order, since we passed the states in sorted order
-            confidences = self.compute_confidences(contexts, states).T
+            confidences = self.compute_confidences(input_values, contexts, states).T
             all_confidences = numpy.vstack([all_confidences, confidences])
 
             # Record chosen output and compute new states
-            states.update(self.compute_next_states(contexts, states, outputs))
+            states.update(self.compute_next_states(input_values, contexts, states, outputs))
             all_outputs = numpy.vstack([all_outputs, outputs[None, :]])
             all_costs = numpy.vstack([all_costs, chosen_costs[None, :]])
 

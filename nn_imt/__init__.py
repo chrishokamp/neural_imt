@@ -89,8 +89,11 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     # WORKING: implement the constraint pointer model
     use_constraint_pointer_model = config.get('use_constraint_pointer_model', False)
     model_choice_sequence = None
+    true_target=None
     if use_constraint_pointer_model:
         model_choice_sequence = tensor.matrix('model_choice_sequence')
+        # the target sequence without the pointer index replacements
+        true_target = tensor.lmatrix('target')
 
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
@@ -105,7 +108,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     decoder.name = 'decoder'
 
     additional_attn_over_internal_states = config.get('distribute_prefix_attention_over_inputs', True)
-    import ipdb; ipdb.set_trace()
     cost = decoder.cost(
         encoder.apply(source_sentence, source_sentence_mask),
         source_sentence_mask,
@@ -115,7 +117,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         additional_attention_in_internal_states=additional_attn_over_internal_states,
         prefix_in_initial_state=prefix_in_initial_state,
         initial_state_representation=initial_state_representation,
-        model_choice_sequence=model_choice_sequence
+        model_choice_sequence=model_choice_sequence,
+        true_target=true_target
     )
 
     logger.info('Creating computational graph')
@@ -141,8 +144,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     decoder.push_initialization_config()
     decoder.transition.weights_init = Orthogonal()
     decoder.initialize()
-
-    #import ipdb; ipdb.set_trace()
 
     # apply dropout for regularization
     if config['dropout'] < 1.0:
@@ -297,7 +298,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     #     v.name = k.name + '_{}'.format(i)
     #
     # aux_vars = [v for v in cg.auxiliary_variables[-3:]]
-    # import ipdb; ipdb.set_trace()
 
 
     extensions.extend([
@@ -324,7 +324,8 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
 
 # TODO: break this function into parts
 def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, prefix_encoder=None, brick_delimiter=None,
-                                    prefix_attention=False, use_initial_state_representation=False):
+                                    prefix_attention=False, use_initial_state_representation=False,
+                                    use_constraint_pointer_model=False):
 
     if encoder is None:
         encoder = BidirectionalEncoder(
@@ -342,7 +343,8 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, pref
             exp_config['enc_nhids'] * 2, loss_function='cross_entropy',
             prefix_attention=prefix_attention,
             prefix_attention_in_readout=exp_config.get('prefix_attention_in_readout', False),
-            use_initial_state_representation=use_initial_state_representation
+            use_initial_state_representation=use_initial_state_representation,
+            use_constraint_pointer_model=use_constraint_pointer_model
         )
         # rename to match baseline NMT systems so that params can be transparently initialized
         decoder.name = 'decoder'
@@ -424,10 +426,12 @@ class IMTPredictor:
     def __init__(self, exp_config):
 
         use_initial_state_representation = exp_config.get('initial_state_from_constraints', False)
+        use_constraint_pointer_model = exp_config.get('use_constraint_pointer_model', False)
         theano_variables = load_params_and_get_beam_search(exp_config,
                                                            brick_delimiter=exp_config.get('brick_delimiter', None),
                                                            prefix_attention=exp_config.get('prefix_attention', False),
-                                                           use_initial_state_representation=use_initial_state_representation)
+                                                           use_initial_state_representation=use_initial_state_representation,
+                                                           use_constraint_pointer_model=use_constraint_pointer_model)
         # beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
         self.beam_search, search_model, samples, self.source_sampling_input, self.target_sampling_input = theano_variables
 
@@ -716,6 +720,7 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
                                                                         trg_vocab=config_obj['trg_vocab'],
                                                                         trg_vocab_size=config_obj['trg_vocab_size'],
                                                                         unk_id=config_obj['unk_id'],
+									use_constraint_pointer_model=config_obj.get('use_constraint_pointer_model', False),
                                                                         return_vocab=True)
 
 
@@ -739,8 +744,11 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
                 for l in list(predict_stream.get_epoch_iterator()):
                     # currently our datastream is (source,target,prefix,suffix)
                     source = l[0]
-                    prefix = l[-2]
-                    suffix = l[-1]
+                    prefix = l[2]
+		    if constraint_pointer_model:
+                        suffix = l[1]
+		    else:
+			suffix = l[3]
                     source_text = sampling_base._idx_to_word(source, src_ivocab)
                     prefix_text = sampling_base._idx_to_word(prefix, trg_ivocab)
                     suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)

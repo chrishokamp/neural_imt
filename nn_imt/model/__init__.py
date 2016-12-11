@@ -168,7 +168,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             # generator model index = 0 pointer model index = 1
             # Note: the purpose of combining the probs in this way is to allow beam search to filter the graph
             # of this method later, to find the `combined_probs` variable
-            combined_probs = self.combine_probs(generator_probs, pointer_probs, model_choice.astype('float32'))
+            combined_probs = self.combine_probs(generator_probs, generator_probs, model_choice.astype('float32'))
 
             # Note: using exp is a hack to to map back into real space so that we can use `self.readout.emit` -- wastes a lot of computation!
             next_readouts = tensor.exp(combined_probs)

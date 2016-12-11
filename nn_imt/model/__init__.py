@@ -146,12 +146,20 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             # TODO: verify that offsets are correct
             pointer_offsets = tensor.arange(0, target_prefix_shape[0]*target_prefix_shape[1], target_prefix_shape[1])
             pointer_readouts = glimpses['weights_0']
+
             pointer_attention_indices = pointer_readouts.argmax(-1).flatten() + pointer_offsets
-            pointer_probs = target_prefix.flatten()[pointer_attention_indices]
+            true_pointer_idxs = target_prefix.flatten()[pointer_attention_indices]
+            # these are the true indices in (batch, constraint_len)
+            # TODO: we need a `target_vocab` sized probability distribution, where only the pointer candidates are non-zero
+            # Note that the one-hot method here loses the possiblity of sampling from the pointer distribution
+            # theres always only 1 option
 
             generator_readouts = self.readout.readout(feedback=self.readout.feedback(outputs),
                                                       **dict_union(states, next_glimpses, contexts))
             generator_probs = self.readout.emitter.probs(generator_readouts)
+
+            pointer_probs = tensor.zeros_like(generator_probs) - 10.
+            tensor.set_subtensor(pointer_probs[tensor.arange(target_prefix_shape[0], true_pointer_idxs)], 1.)
 
             # generator model index = 0 pointer model index = 1
             # each batch item now contains 1 or 0

@@ -713,6 +713,7 @@ class IMTPredictor:
 # TODO: use the refs properly as specified in the function signature
 def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
 
+    use_constraint_pointer_model=config_obj.get('use_constraint_pointer_model', False),
     predict_stream, src_vocab, trg_vocab = get_dev_stream_with_prefixes(val_set=config_obj['test_set'],
                                                                         val_set_grndtruth=config_obj['test_gold_refs'],
                                                                         src_vocab=config_obj['src_vocab'],
@@ -720,7 +721,7 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
                                                                         trg_vocab=config_obj['trg_vocab'],
                                                                         trg_vocab_size=config_obj['trg_vocab_size'],
                                                                         unk_id=config_obj['unk_id'],
-									use_constraint_pointer_model=config_obj.get('use_constraint_pointer_model', False),
+                                                                        use_constraint_pointer_model=use_constraint_pointer_model,
                                                                         return_vocab=True)
 
 
@@ -745,7 +746,7 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
                     # currently our datastream is (source,target,prefix,suffix)
                     source = l[0]
                     prefix = l[2]
-		    if constraint_pointer_model:
+		    if use_constraint_pointer_model:
                         suffix = l[1]
 		    else:
 			suffix = l[3]

@@ -124,6 +124,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # WORKING: if the chosen model was the pointer, map through the attended constraints sequence to get the actual word index
 
         if self.constraint_pointer_model is not None:
+            import ipdb;ipdb.set_trace()
 
             # compute the model gates
             model_gates = self.constraint_pointer_model.apply(**{
@@ -151,6 +152,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             pointer_attention_indices = pointer_readouts.argmax(-1).flatten() + pointer_offsets
             pointer_outputs = target_prefix.flatten()[pointer_attention_indices]
 
+            # HACK
+            orig_pointer_outputs = target_prefix.flatten()[pointer_attention_indices]
+
             generator_readouts = self.readout.readout(feedback=self.readout.feedback(outputs),
                                                       **dict_union(states, next_glimpses, contexts))
             generator_outputs = self.readout.emit(generator_readouts)
@@ -160,6 +164,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             generator_outputs *= (1 - model_choice)
             # output_candidates = tensor.concatenate([generator_outputs, pointer_outputs], axis=-1)
             next_outputs = pointer_outputs + generator_outputs
+            # HACK
+            next_outputs = orig_pointer_outputs
 
             # WORKING: zero out readouts of both models to combine
             pointer_readouts *= model_gates

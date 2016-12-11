@@ -133,7 +133,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                 'weighted_averages_0': next_glimpses['weighted_averages_0']
             })
 
-            # compute the outputs of both models, stack them together, then use the model gates to select which one to use
+            # compute the outputs of both models, stack them together,
+            # then use the model gates to select which one to use
 
             # generator model index = 0 pointer model index = 1
             # each batch item now contains 1 or 0
@@ -153,7 +154,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
             generator_readouts = self.readout.readout(feedback=self.readout.feedback(outputs),
                                                       **dict_union(states, next_glimpses, contexts))
-            generator_probs = self.readout.probs(generator_readouts)
+            generator_probs = self.readout.emitter.probs(generator_readouts)
             # generator model index = 0 pointer model index = 1
             # Note: the purpose of combining the probs in this way is to allow beam search to filter the graph
             # of this method later, to find the `combined_probs` variable

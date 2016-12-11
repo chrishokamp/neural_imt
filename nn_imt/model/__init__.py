@@ -159,7 +159,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             generator_probs = self.readout.emitter.probs(generator_readouts)
 
             pointer_probs = tensor.zeros_like(generator_probs)
-            # TWO BUGS: one in the line below, and one in the model_choice shape -- multiplying to zero out rows
+            # BUG:  model_choice shape -- multiplying to zero out rows
             # IDEA: don't multiply, set subtensor to zeros
             tensor.set_subtensor(pointer_probs[tensor.arange(target_prefix_shape[0]), true_pointer_idxs], 1.)
 
@@ -218,12 +218,12 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         import ipdb;ipdb.set_trace()
 
         # reshape to columns
-        # model_selector = model_selector.reshape((1, model_selector.shape[0]))
+        model_selector = model_selector.reshape((1, model_selector.shape[0]))
         import ipdb;ipdb.set_trace()
-        # masked_probs_0 = probs_0 * (1. - model_selector)
-        # masked_probs_1 = probs_1 * model_selector
-        # return masked_probs_0 + masked_probs_1
-        return probs_0 + probs_1
+        masked_probs_0 = probs_0 * (1. - model_selector)
+        masked_probs_1 = probs_1 * model_selector
+        return masked_probs_0 + masked_probs_1
+        # return probs_0 + probs_1
 
 
     @generate.delegate

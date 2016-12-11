@@ -220,7 +220,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         import ipdb;ipdb.set_trace()
         # masked_probs_0 = probs_0 * (1. - model_selector)
         # masked_probs_1 = probs_1 * model_selector
-        return masked_probs_0 + masked_probs_1
+        # return masked_probs_0 + masked_probs_1
+        return probs_0 + probs_1
 
 
     @generate.delegate

@@ -1390,7 +1390,7 @@ class SharedLookupFeedback(AbstractFeedback, Initializable):
         self.feedback_dim = feedback_dim
 
         children = [self.lookup] + kwargs.get('children', [])
-        super(LookupFeedback, self).__init__(children=children, **kwargs)
+        super(SharedLookupFeedback, self).__init__(children=children, **kwargs)
 
     def _push_allocation_config(self):
         if not self.external_lookup:

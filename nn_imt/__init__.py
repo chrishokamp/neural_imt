@@ -95,10 +95,17 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         # the target sequence without the pointer index replacements
         true_target = tensor.lmatrix('target')
 
+    # if we're using target-side attention, share the embeddings between then
+    # attention representation and the decoder
+    target_lookup = None
+    if prefix_attention or use_initial_state_representation:
+        target_lookup = prefix_encoder.lookup
+
     decoder = NMTPrefixDecoder(
         config['trg_vocab_size'], config['dec_embed'], config['dec_nhids'],
         config['enc_nhids'] * 2, loss_function='cross_entropy',
         prefix_attention=prefix_attention,
+        target_lookup=target_lookup,
         prefix_attention_in_readout=config.get('prefix_attention_in_readout', False),
         use_initial_state_representation=use_initial_state_representation,
         use_constraint_pointer_model=use_constraint_pointer_model
@@ -331,10 +338,13 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, pref
         encoder = BidirectionalEncoder(
             exp_config['src_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'])
 
-    if prefix_encoder is None and (prefix_attention == True or use_initial_state_representation):
+    if prefix_encoder is None and (prefix_attention or use_initial_state_representation):
         prefix_encoder = BidirectionalEncoder(
             exp_config['trg_vocab_size'], exp_config['enc_embed'], exp_config['enc_nhids'], name='prefixencoder')
 
+    target_lookup = None
+    if prefix_attention or use_initial_state_representation:
+        target_lookup = prefix_encoder.lookup
 
     # Note: decoder should be None when we are just doing prediction, not validation
     if decoder is None:
@@ -342,6 +352,7 @@ def load_params_and_get_beam_search(exp_config, decoder=None, encoder=None, pref
             exp_config['trg_vocab_size'], exp_config['dec_embed'], exp_config['dec_nhids'],
             exp_config['enc_nhids'] * 2, loss_function='cross_entropy',
             prefix_attention=prefix_attention,
+            target_lookup=target_lookup,
             prefix_attention_in_readout=exp_config.get('prefix_attention_in_readout', False),
             use_initial_state_representation=use_initial_state_representation,
             use_constraint_pointer_model=use_constraint_pointer_model

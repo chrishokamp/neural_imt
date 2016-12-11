@@ -20,7 +20,7 @@ from blocks.bricks.parallel import Fork, Merge
 from blocks.bricks.recurrent import GatedRecurrent, Bidirectional
 from blocks.bricks.sequence_generators import (
     LookupFeedback, Readout, SoftmaxEmitter,
-    SequenceGenerator)
+    SequenceGenerator, AbstractFeedback)
 from blocks.utils import pack
 
 
@@ -109,7 +109,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # masks in context are optional (e.g. `attended_mask`)
         contexts = dict_subset(kwargs, self._context_names, must_have=False)
         glimpses = dict_subset(kwargs, self._glimpse_names)
-        # WORKING: do we have _all_ of the glimpse names here?
 
         # Note: where there are multiple glimpses, we need to compute them all, and provide them all to the next time step
         # glimpses is a list len(glimpses) % 2 = 0
@@ -1044,6 +1043,7 @@ class NMTPrefixDecoder(Initializable):
                  representation_dim, theano_seed=None, loss_function='cross_entropy',
                  use_post_merge=True,
                  prefix_attention=False,
+                 target_lookup=None,
                  prefix_attention_in_readout=False,
                  use_initial_state_representation=False,
                  use_constraint_pointer_model=False,
@@ -1159,11 +1159,18 @@ class NMTPrefixDecoder(Initializable):
             constraint_pointer_model.children[0].use_bias = True
             self.constraint_pointer_model = constraint_pointer_model
 
+        if target_lookup is not None:
+            feedback_brick = ZeroReadoutLookupFeedback(lookup_table=target_lookup,
+                                                       num_outputs=vocab_size,
+                                                       feedback_dim=embedding_dim)
+        else:
+            feedback_brick = ZeroReadoutLookupFeedback(num_outputs=vocab_size, feedback_dim=embedding_dim)
+
         readout = Readout(
             source_names=['states', 'feedback'] + attention_sources,
             readout_dim=self.vocab_size,
             emitter=SoftmaxEmitter(initial_output=-1, theano_seed=theano_seed),
-            feedback_brick=LookupFeedbackWMT15(vocab_size, embedding_dim),
+            feedback_brick=feedback_brick,
             post_merge=readout_post_merge,
             merged_dim=state_dim)
 
@@ -1364,23 +1371,60 @@ class NMTPrefixDecoder(Initializable):
             **kwargs)
 
 
+class SharedLookupFeedback(AbstractFeedback, Initializable):
+    """A feedback brick which lets the user provide the LookupTable
+
+    Stores and retrieves distributed representations of integers.
+
+    """
+    def __init__(self, lookup_table=None, num_outputs=None, feedback_dim=None, **kwargs):
+
+        self.external_lookup = False
+        if lookup_table is not None:
+            self.lookup = lookup_table
+            self.external_lookup = True
+        else:
+            self.lookup = LookupTable(num_outputs, feedback_dim)
+
+        self.num_outputs = num_outputs
+        self.feedback_dim = feedback_dim
+
+        children = [self.lookup] + kwargs.get('children', [])
+        super(LookupFeedback, self).__init__(children=children, **kwargs)
+
+    def _push_allocation_config(self):
+        if not self.external_lookup:
+            self.lookup.length = self.num_outputs
+            self.lookup.dim = self.feedback_dim
+
+    @application
+    def feedback(self, outputs):
+        assert self.output_dim == 0
+        return self.lookup.apply(outputs)
+
+    def get_dim(self, name):
+        if name == 'feedback':
+            return self.feedback_dim
+        return super(LookupFeedback, self).get_dim(name)
+
+
 
 # WORKING: use a shared embedding between source and target -- Feedback brick which allows for this
-# class LookupFeedbackWMT15(LookupFeedback):
-    # """Zero-out initial readout feedback by checking its value."""
-    #
-    # @application
-    # def feedback(self, outputs):
-    #     assert self.output_dim == 0
-    #
-    #     shp = [outputs.shape[i] for i in range(outputs.ndim)]
-    #     outputs_flat = outputs.flatten()
-    #     outputs_flat_zeros = tensor.switch(outputs_flat < 0, 0,
-    #                                        outputs_flat)
-    #
-    #     lookup_flat = tensor.switch(
-    #         outputs_flat[:, None] < 0,
-    #         tensor.alloc(0., outputs_flat.shape[0], self.feedback_dim),
-    #         self.lookup.apply(outputs_flat_zeros))
-    #     lookup = lookup_flat.reshape(shp+[self.feedback_dim])
-    #     return lookup
+class ZeroReadoutLookupFeedback(SharedLookupFeedback):
+    """Zero-out initial readout feedback by checking its value."""
+
+    @application
+    def feedback(self, outputs):
+        assert self.output_dim == 0
+
+        shp = [outputs.shape[i] for i in range(outputs.ndim)]
+        outputs_flat = outputs.flatten()
+        outputs_flat_zeros = tensor.switch(outputs_flat < 0, 0,
+                                           outputs_flat)
+
+        lookup_flat = tensor.switch(
+            outputs_flat[:, None] < 0,
+            tensor.alloc(0., outputs_flat.shape[0], self.feedback_dim),
+            self.lookup.apply(outputs_flat_zeros))
+        lookup = lookup_flat.reshape(shp+[self.feedback_dim])
+        return lookup

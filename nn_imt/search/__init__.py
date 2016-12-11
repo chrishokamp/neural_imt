@@ -124,6 +124,7 @@ class BeamSearch(object):
         # This filtering should return identical variables
         # (in terms of computations) variables, and we do not care
         # which to use.
+        # Note: filtering by self.generator.readout.emitter.probs limits us to the outputs of that ApplicationMethod
         probs = VariableFilter(
             applications=[self.generator.readout.emitter.probs],
             roles=[OUTPUT])(self.inner_cg)[0]

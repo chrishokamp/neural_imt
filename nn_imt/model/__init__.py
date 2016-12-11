@@ -1167,7 +1167,8 @@ class NMTPrefixDecoder(Initializable):
             constraint_pointer_model.children[0].use_bias = True
             self.constraint_pointer_model = constraint_pointer_model
 
-        if target_lookup is not None:
+        # WORKING: fix bug in LookupTable sharing
+        if False:
             feedback_brick = ZeroReadoutLookupFeedback(lookup_table=target_lookup,
                                                        num_outputs=vocab_size,
                                                        feedback_dim=embedding_dim)

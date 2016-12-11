@@ -142,8 +142,11 @@ class BeamSearch(object):
 
         # Note the negative sign here, this lets us use the logprobability as a cost to be minimized
         logprobs = -tensor.log(probs)
+        #self.logprobs_computer = function(
+        #    self.contexts + self.input_states, logprobs,
+        #    on_unused_input='ignore')
         self.logprobs_computer = function(
-            self.contexts + self.input_states, logprobs,
+            self.inputs + self.contexts + self.input_states, logprobs,
             on_unused_input='ignore')
 
     # get confidences during the beam search
@@ -192,7 +195,7 @@ class BeamSearch(object):
         initial_states = outputs
         return contexts, initial_states, beam_size
 
-    def compute_logprobs(self, contexts, states):
+    def compute_logprobs(self, inputs, contexts, states):
         """Compute log probabilities of all possible outputs.
 
         Parameters
@@ -208,8 +211,10 @@ class BeamSearch(object):
         outputs) shape.
 
         """
+        mapped_inputs = [inputs[var] for var in self.inputs]
+
         input_states = [states[name] for name in self.input_state_names]
-        return self.logprobs_computer(*(list(contexts.values()) +
+        return self.logprobs_computer(*(mapped_inputs + list(contexts.values()) +
                                       input_states))
 
     def compute_confidences(self, inputs, contexts, states):
@@ -353,7 +358,8 @@ class BeamSearch(object):
             # We carefully hack values of the `logprobs` array to ensure
             # that all finished sequences are continued with `eos_symbol`.
             # logprobs: (beam_size, target_vocab_size)
-            logprobs = self.compute_logprobs(contexts, states)
+            #logprobs = self.compute_logprobs(contexts, states)
+            logprobs = self.compute_logprobs(input_values, contexts, states)
             # The additional dim (`None`) is needed to maintain 2d, and to
             # make the broadcasting of `logprobs * all_masks[-1, :, None] work
             next_costs = (all_costs[-1, :, None] +

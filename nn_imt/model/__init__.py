@@ -155,7 +155,8 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
             # generator model index = 0 pointer model index = 1
             # each batch item now contains 1 or 0
-            model_choice = model_gates.argmax(axis=-1)
+            # Note: removing extra time dimension
+            model_choice = model_gates[0].argmax(axis=-1)
             # generator model index = 0 pointer model index = 1
             # Note: the purpose of combining the probs in this way is to allow beam search to filter the graph
             # of this method later, to find the `combined_probs` variable

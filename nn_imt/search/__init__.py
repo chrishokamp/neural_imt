@@ -211,7 +211,8 @@ class BeamSearch(object):
         outputs) shape.
 
         """
-        mapped_inputs = [inputs[var] for var in self.inputs]
+        # Note: wrapping in one time dimension
+        mapped_inputs = [numpy.array([inputs[var]]) for var in self.inputs]
 
         input_states = [states[name] for name in self.input_state_names]
         return self.logprobs_computer(*(mapped_inputs + list(contexts.values()) +

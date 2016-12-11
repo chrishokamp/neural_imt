@@ -159,7 +159,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             generator_probs = self.readout.emitter.probs(generator_readouts)
 
             pointer_probs = tensor.zeros_like(generator_probs)
-            tensor.set_subtensor(pointer_probs[tensor.arange(target_prefix_shape[0], true_pointer_idxs)], 1.)
+            # tensor.set_subtensor(pointer_probs[tensor.arange(target_prefix_shape[0], true_pointer_idxs)], 1.)
 
             # generator model index = 0 pointer model index = 1
             # each batch item now contains 1 or 0

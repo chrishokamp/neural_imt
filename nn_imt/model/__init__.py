@@ -136,9 +136,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             # compute the outputs of both models, stack them together,
             # then use the model gates to select which one to use
 
-            # generator model index = 0 pointer model index = 1
-            # each batch item now contains 1 or 0
-            model_choice = model_gates.argmax(axis=-1)
 
             # For the ones that came from the pointer model, we need to map the pointer indices to the global indices
             # TODO: rename 'target_prefix' to 'target_constraints'
@@ -155,10 +152,14 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             generator_readouts = self.readout.readout(feedback=self.readout.feedback(outputs),
                                                       **dict_union(states, next_glimpses, contexts))
             generator_probs = self.readout.emitter.probs(generator_readouts)
+
+            # generator model index = 0 pointer model index = 1
+            # each batch item now contains 1 or 0
+            model_choice = model_gates.argmax(axis=-1)
             # generator model index = 0 pointer model index = 1
             # Note: the purpose of combining the probs in this way is to allow beam search to filter the graph
             # of this method later, to find the `combined_probs` variable
-            combined_probs = self.combine_probs(generator_probs, pointer_probs, model_choice)
+            combined_probs = self.combine_probs(generator_probs, pointer_probs, model_choice.astype('float32'))
 
             # Note: using exp is a hack to to map back into real space so that we can use `self.readout.emit` -- wastes a lot of computation!
             next_readouts = tensor.exp(combined_probs)

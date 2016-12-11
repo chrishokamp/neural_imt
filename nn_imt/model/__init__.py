@@ -149,27 +149,19 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             pointer_offsets = tensor.arange(0, target_prefix_shape[0]*target_prefix_shape[1], target_prefix_shape[1])
             pointer_readouts = glimpses['weights_0']
             pointer_attention_indices = pointer_readouts.argmax(-1).flatten() + pointer_offsets
-            pointer_outputs = target_prefix.flatten()[pointer_attention_indices]
-
-            # HACK
-            orig_pointer_outputs = target_prefix.flatten()[pointer_attention_indices]
+            pointer_probs = target_prefix.flatten()[pointer_attention_indices]
 
             generator_readouts = self.readout.readout(feedback=self.readout.feedback(outputs),
                                                       **dict_union(states, next_glimpses, contexts))
-            generator_outputs = self.readout.emit(generator_readouts)
+            generator_probs = self.readout.probs(generator_readouts)
             # generator model index = 0 pointer model index = 1
-            # WORKING: hackish way to combine two models outputs by summing
-            pointer_outputs *= model_choice
-            generator_outputs *= (1 - model_choice)
-            # output_candidates = tensor.concatenate([generator_outputs, pointer_outputs], axis=-1)
-            next_outputs = pointer_outputs + generator_outputs
-            # HACK
-            next_outputs = orig_pointer_outputs
+            # Note: the purpose of combining the probs in this way is to allow beam search to filter the graph
+            # of this method later, to find the `combined_probs` variable
+            combined_probs = self.combine_probs(generator_probs, pointer_probs, model_choice)
 
-            # WORKING: zero out readouts of both models to combine
-            pointer_readouts *= model_gates
-            generator_readouts *= (1 - model_gates)
-            next_readouts = pointer_readouts + generator_readouts
+            # Note: using exp is a hack to to map back into real space so that we can use `self.readout.emit` -- wastes a lot of computation!
+            next_readouts = tensor.exp(combined_probs)
+            next_outputs = self.readout.emit(next_readouts)
         else:
             next_readouts = self.readout.readout(
                 feedback=self.readout.feedback(outputs),
@@ -200,6 +192,21 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         return (next_states + [next_outputs] + 
                 list(next_glimpses.values()) +  [next_probs] + [next_confidences] + [next_costs])
 
+    @application
+    def combine_probs(self, probs_0, probs_1, model_selector):
+        """Combine two sets of softmax outputs from different models
+        We create a separate method so that we can directly filter the output of this method from the
+        graph when compiling beam search
+
+        The @application decorator lets us parse the graph to get the output of this method
+
+        In the model selector, '0' corresponds to selecting the index from probs_0, '1' selects the output from probs_1
+        """
+        masked_probs_0 = probs_0 * (1. - model_selector)
+        masked_probs_1 = probs_1 * model_selector
+        return masked_probs_0 + masked_probs_1
+
+
     @generate.delegate
     def generate_delegate(self):
         return self.transition.apply
@@ -212,7 +219,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     def generate_outputs(self):
         # WORKING: the order here depends upon the order of the outputs of self.generate(?)
         return (self._state_names + ['outputs'] +
-                self._glimpse_names +  ['word_probs'] + ['word_confidences'] + ['costs'])
+                self._glimpse_names + ['word_probs'] + ['word_confidences'] + ['costs'])
 
     def get_dim(self, name):
         if name in (self._state_names + self._context_names +

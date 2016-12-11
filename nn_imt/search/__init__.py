@@ -78,6 +78,9 @@ class BeamSearch(object):
                            name=name,
                            roles=[INPUT])(self.inner_cg)[0]
             for name in self.context_names]
+        # TODO: where do the contexts get assigned the `INPUT` role?
+        import ipdb;ipdb.set_trace()
+
         self.input_states = []
         # Includes only those state names that were actually used
         # in 'generate'
@@ -124,10 +127,19 @@ class BeamSearch(object):
         # This filtering should return identical variables
         # (in terms of computations) variables, and we do not care
         # which to use.
-        # Note: filtering by self.generator.readout.emitter.probs limits us to the outputs of that ApplicationMethod
-        probs = VariableFilter(
-            applications=[self.generator.readout.emitter.probs],
-            roles=[OUTPUT])(self.inner_cg)[0]
+
+        if self.generator.constraint_pointer_model is not None:
+            import ipdb;ipdb.set_trace()
+            probs = VariableFilter(
+                applications=[self.generator.combine_probs],
+                roles=[OUTPUT])(self.inner_cg)[0]
+
+        else:
+            # Note: filtering by self.generator.readout.emitter.probs limits us to the outputs of that ApplicationMethod
+            probs = VariableFilter(
+                applications=[self.generator.readout.emitter.probs],
+                roles=[OUTPUT])(self.inner_cg)[0]
+
         # Note the negative sign here, this lets us use the logprobability as a cost to be minimized
         logprobs = -tensor.log(probs)
         self.logprobs_computer = function(

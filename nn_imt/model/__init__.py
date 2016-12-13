@@ -1185,8 +1185,8 @@ class NMTPrefixDecoder(Initializable):
 
             self.constraint_pointer_model = constraint_pointer_model
 
-        # WORKING: fix bug in LookupTable sharing
-        if False:
+        # WORKING: fix bug in LookupTable sharing -- why does cost become NaN?
+        if target_lookup is not None:
             feedback_brick = ZeroReadoutLookupFeedback(lookup_table=target_lookup,
                                                        num_outputs=vocab_size,
                                                        feedback_dim=embedding_dim)
@@ -1418,7 +1418,13 @@ class SharedLookupFeedback(AbstractFeedback, Initializable):
         self.num_outputs = num_outputs
         self.feedback_dim = feedback_dim
 
-        children = [self.lookup] + kwargs.get('children', [])
+        if not self.external_lookup:
+            children = [self.lookup] + kwargs.get('children', [])
+        else:
+            # Note: it's critical that we don't add the lookup to the children if it was provided externally,
+            # Note: there is a bug somewhere in the initialization that will cause cost to be nan if lookup in children
+            children = kwargs.get('children', [])
+
         super(SharedLookupFeedback, self).__init__(children=children, **kwargs)
 
     def _push_allocation_config(self):
@@ -1438,6 +1444,9 @@ class SharedLookupFeedback(AbstractFeedback, Initializable):
 
 
 class ConcatenatingLinear(Linear):
+    """
+    This brick takes a dict of inputs and concatenates them together before passing through a linear layer
+    """
 
     @lazy(allocation=['input_dims'])
     def __init__(self, input_names, input_dims, output_dim, **kwargs):
@@ -1456,7 +1465,6 @@ class ConcatenatingLinear(Linear):
         super(ConcatenatingLinear, self)._push_allocation_config()
 
 
-# WORKING: use a shared embedding between source and target -- Feedback brick which allows for this
 class ZeroReadoutLookupFeedback(SharedLookupFeedback):
     """Zero-out initial readout feedback by checking its value."""
 
@@ -1475,3 +1483,17 @@ class ZeroReadoutLookupFeedback(SharedLookupFeedback):
             self.lookup.apply(outputs_flat_zeros))
         lookup = lookup_flat.reshape(shp+[self.feedback_dim])
         return lookup
+
+
+# WORKING: new FactoredFeedback brick which concatenates the outputs of multiple feedbacks, allowing for arbitrary factors
+# WORKING: each feedback can either be passed in externally, or initialized
+class FactoredLookupTable(Initializable):
+    """This brick works like a lookup table, but accepts multiple input factors, whose embeddings are
+    concatenated together.
+
+    The LookupTable for each factor can be provided externally, or created by this brick
+    """
+
+    def __init__(self):
+        pass
+

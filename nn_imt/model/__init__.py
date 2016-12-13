@@ -2,7 +2,7 @@ import theano
 from theano import tensor
 from toolz import merge
 
-from blocks.bricks.base import application
+from blocks.bricks.base import application, lazy
 from blocks.bricks.recurrent import recurrent
 from blocks.bricks import NDimensionalSoftmax
 from blocks.bricks.parallel import Parallel, Distribute
@@ -123,7 +123,6 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
         # WORKING: if the chosen model was the pointer, map through the attended constraints sequence to get the actual word index
 
         if self.constraint_pointer_model is not None:
-            import ipdb;ipdb.set_trace()
 
             # compute the model gates
             model_gates = self.constraint_pointer_model.apply(**{
@@ -158,10 +157,10 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                                                       **dict_union(states, next_glimpses, contexts))
             generator_probs = self.readout.emitter.probs(generator_readouts)
 
-            pointer_probs = tensor.zeros_like(generator_probs)
+            pointer_probs = tensor.zeros_like(generator_probs) + 0.00001
             # BUG:  model_choice shape -- multiplying to zero out rows
             # IDEA: don't multiply, set subtensor to zeros
-            tensor.set_subtensor(pointer_probs[tensor.arange(target_prefix_shape[0]), true_pointer_idxs], 1.)
+            pointer_probs = tensor.set_subtensor(pointer_probs[tensor.arange(target_prefix_shape[0]), true_pointer_idxs], 1.-(25499.*0.00001))
 
             # generator model index = 0 pointer model index = 1
             # each batch item now contains 1 or 0
@@ -215,15 +214,12 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         In the model selector, '0' corresponds to selecting the index from probs_0, '1' selects the output from probs_1
         """
-        import ipdb;ipdb.set_trace()
 
         # reshape to columns
         model_selector = model_selector.reshape((model_selector.shape[0], 1))
-        import ipdb;ipdb.set_trace()
         masked_probs_0 = probs_0 * (1. - model_selector)
         masked_probs_1 = probs_1 * model_selector
         return masked_probs_0 + masked_probs_1
-        # return probs_0 + probs_1
 
 
     @generate.delegate
@@ -314,6 +310,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
         elif 'target_prefix' in kwargs and not kwargs.get('prefix_in_initial_state', True):
             # simply overwrite the dummy states from MultipleAttentionRecurrent
+            # TODO: use `batch_size` to reshape to make sure that it stays in the graph??
             state_dict = dict(
                 self.transition.initial_states(
                     batch_size, as_dict=True, *args, **kwargs),
@@ -342,7 +339,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
     def compute_states(self, outputs, mask=None, **kwargs):
         """
         Return the result of running the recurrent transition over the provided outputs (which are transformed to inputs
-        via `self.readout.feedback`
+        via `self.readout.feedback`)
 
         :param outputs:
         :param mask:
@@ -494,8 +491,7 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
                 'weighted_averages': glimpses['weighted_averages'],
                 'weighted_averages_0': glimpses['weighted_averages_0']
             })
-            # WORKING: now map the model gates to 0 or 1, or use 2-dimensional output?
-            # now get the argmax of the pointer model at each time step -- TODO: the argmax is only used at prediction time
+            # now map the model gates to a probability distribution
             model_gates = self.softmax.apply(model_gates, extra_ndim=model_gates.ndim - 2)
 
             # Note: here we must rely upon the combination of two indexes: one to let the model know that we're using the _pointer_
@@ -526,8 +522,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
             # Note: at prediction time, we'll need to map from attention index to global index, but this isn't needed at training time
             # Note: the global index is contained in the constraint sequence anyway -- this mapping is easy as long as we know which model we used
             # indexes in model_choice_sequence -- pointer model = 1 generator = 0
-            generator_costs *= model_gates[:, :, 0]
-            pointer_costs *= model_gates[:, :, 1]
+            # TODO: do we need to scale by the gate probability or not?
+            #generator_costs *= model_gates[:, :, 0]
+            #pointer_costs *= model_gates[:, :, 1]
             pointer_costs *= model_choice_sequence
             generator_costs *= (1. - model_choice_sequence)
             costs = pointer_costs + generator_costs
@@ -1179,10 +1176,13 @@ class NMTPrefixDecoder(Initializable):
         if use_constraint_pointer_model:
             pointer_model_attention_sources = [self.attention[0].take_glimpses.outputs[0],
                                                self.attention[1].take_glimpses.outputs[0] + '_0']
-            constraint_pointer_model = Merge(input_names=['states', 'feedback'] + pointer_model_attention_sources,
-                                             output_dim=2)
+            constraint_pointer_model = ConcatenatingLinear(input_names=['states', 'feedback'] + pointer_model_attention_sources,
+                                                           output_dim=2)
+            #constraint_pointer_model = Merge(input_names=['states', 'feedback'] + pointer_model_attention_sources,
+            #                                 output_dim=2)
             # see Merge brick docstring for why we set the bias in this way
-            constraint_pointer_model.children[0].use_bias = True
+            #constraint_pointer_model.children[0].use_bias = True
+
             self.constraint_pointer_model = constraint_pointer_model
 
         # WORKING: fix bug in LookupTable sharing
@@ -1192,6 +1192,8 @@ class NMTPrefixDecoder(Initializable):
                                                        feedback_dim=embedding_dim)
         else:
             feedback_brick = ZeroReadoutLookupFeedback(num_outputs=vocab_size, feedback_dim=embedding_dim)
+        # this is to keep backwards compatibility
+        feedback_brick.name = 'lookupfeedbackwmt15'
 
         readout = Readout(
             source_names=['states', 'feedback'] + attention_sources,
@@ -1434,6 +1436,24 @@ class SharedLookupFeedback(AbstractFeedback, Initializable):
             return self.feedback_dim
         return super(LookupFeedback, self).get_dim(name)
 
+
+class ConcatenatingLinear(Linear):
+
+    @lazy(allocation=['input_dims'])
+    def __init__(self, input_names, input_dims, output_dim, **kwargs):
+        self.input_names = input_names
+        self.input_dims = input_dims
+        self.output_dim = output_dim
+        super(ConcatenatingLinear, self).__init__(output_dim=output_dim, **kwargs)
+
+    @application
+    def apply(self, **inputs):
+        stacked_input = tensor.concatenate([inputs[k] for k in self.input_names], axis=-1)
+        return super(ConcatenatingLinear, self).apply(stacked_input)
+    
+    def _push_allocation_config(self):
+        self.input_dim = sum(self.input_dims)
+        super(ConcatenatingLinear, self)._push_allocation_config()
 
 
 # WORKING: use a shared embedding between source and target -- Feedback brick which allows for this

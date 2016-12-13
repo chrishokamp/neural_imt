@@ -757,10 +757,10 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
                     # currently our datastream is (source,target,prefix,suffix)
                     source = l[0]
                     prefix = l[2]
-		    if use_constraint_pointer_model:
+                    if use_constraint_pointer_model:
                         suffix = l[1]
-		    else:
-			suffix = l[3]
+                    else:
+                        suffix = l[3]
                     source_text = sampling_base._idx_to_word(source, src_ivocab)
                     prefix_text = sampling_base._idx_to_word(prefix, trg_ivocab)
                     suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)

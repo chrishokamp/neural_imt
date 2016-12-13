@@ -79,7 +79,6 @@ class BeamSearch(object):
                            roles=[INPUT])(self.inner_cg)[0]
             for name in self.context_names]
         # TODO: where do the contexts get assigned the `INPUT` role?
-        import ipdb;ipdb.set_trace()
 
         self.input_states = []
         # Includes only those state names that were actually used
@@ -129,7 +128,6 @@ class BeamSearch(object):
         # which to use.
 
         if self.generator.constraint_pointer_model is not None:
-            import ipdb;ipdb.set_trace()
             probs = VariableFilter(
                 applications=[self.generator.combine_probs],
                 roles=[OUTPUT])(self.inner_cg)[0]
@@ -146,7 +144,7 @@ class BeamSearch(object):
         #    self.contexts + self.input_states, logprobs,
         #    on_unused_input='ignore')
         self.logprobs_computer = function(
-            self.inputs + self.contexts + self.input_states, logprobs,
+            self.inputs + self.contexts + self.input_states, [probs, logprobs],
             on_unused_input='ignore')
 
     # get confidences during the beam search
@@ -211,12 +209,12 @@ class BeamSearch(object):
         outputs) shape.
 
         """
-        # Note: wrapping in one time dimension
-        mapped_inputs = [numpy.array([inputs[var]]) for var in self.inputs]
+        mapped_inputs = [inputs[var] for var in self.inputs]
 
         input_states = [states[name] for name in self.input_state_names]
-        return self.logprobs_computer(*(mapped_inputs + list(contexts.values()) +
+        probs, logprobs = self.logprobs_computer(*(mapped_inputs + list(contexts.values()) +
                                       input_states))
+        return logprobs
 
     def compute_confidences(self, inputs, contexts, states):
         """Compute model confidence at this timestep

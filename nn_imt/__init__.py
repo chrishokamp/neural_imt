@@ -64,7 +64,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     encoder = BidirectionalEncoder(
         config['src_vocab_size'], config['enc_embed'], config['enc_nhids'])
 
-
     # support _decoder initialization only_ for the prefix representation
     prefix_encoder = None
     prefix_attention = config.get('prefix_attention', False)
@@ -193,7 +192,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         logger.info('    {:15}: {}'.format(value.get_value().shape, name))
     logger.info("Total number of parameters: {}"
                 .format(len(enc_dec_param_dict)))
-
 
     # create the training directory, and copy this config there if directory doesn't exist
     if not os.path.isdir(config['saveto']):

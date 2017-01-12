@@ -213,7 +213,7 @@ class BeamSearch(object):
 
         input_states = [states[name] for name in self.input_state_names]
         probs, logprobs = self.logprobs_computer(*(mapped_inputs + list(contexts.values()) +
-                                      input_states))
+                                                   input_states))
         return logprobs
 
     def compute_confidences(self, inputs, contexts, states):
@@ -257,7 +257,7 @@ class BeamSearch(object):
         inputs = [inputs[var] for var in self.inputs]
         input_states = [states[name] for name in self.input_state_names]
 
-	# TODO: is the order of contexts correct here -- how can we be sure??
+        # TODO: is the order of contexts correct here -- how can we be sure??
         next_values = self.next_state_computer(*(inputs + list(contexts.values()) +
                                                  input_states + [outputs]))
         return OrderedDict(equizip(self.state_names, next_values))
@@ -303,7 +303,7 @@ class BeamSearch(object):
             dictionary of input values. The shapes should be
             the same as if you ran sampling with batch size equal to
             `beam_size`. Put it differently, the user is responsible
-            for duplicaling inputs necessary number of times, because
+            for duplicating inputs necessary number of times, because
             this class has insufficient information to do it properly.
         eol_symbol : int
             End of sequence symbol, the search stops when the symbol is
@@ -360,7 +360,7 @@ class BeamSearch(object):
             #logprobs = self.compute_logprobs(contexts, states)
             logprobs = self.compute_logprobs(input_values, contexts, states)
             # The additional dim (`None`) is needed to maintain 2d, and to
-            # make the broadcasting of `logprobs * all_masks[-1, :, None] work
+            # make the broadcasting of `logprobs * all_masks[-1, :, None]` work
             next_costs = (all_costs[-1, :, None] +
                           logprobs * all_masks[-1, :, None])
             (finished,) = numpy.where(all_masks[-1] == 0)
@@ -416,7 +416,7 @@ class BeamSearch(object):
     @staticmethod
     def result_to_lists(result):
         outputs, masks, costs = [array.T for array in result[:3]]
-        glimpses = result[3].transpose((1,0,2))
+        glimpses = result[3].transpose((1, 0, 2))
         outputs = [list(output[:mask.sum()])
                    for output, mask in equizip(outputs, masks)]
         glimpses = [list(glimpse[:mask.sum()])

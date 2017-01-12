@@ -443,13 +443,14 @@ class IMTPredictor:
                                                            use_constraint_pointer_model=use_constraint_pointer_model)
         # beam_search, search_model, samples, sampling_input, sampling_prefix = sampling_vars
         self.beam_search, search_model, samples, self.source_sampling_input, self.target_sampling_input = theano_variables
+        self.beam_search.compile()
 
         self.exp_config = exp_config
         # how many hyps should be output (only used in file prediction mode)
         self.n_best = exp_config.get('n_best', 1)
 
-        self.source_lang = exp_config.get('source_lang', 'en')
-        self.target_lang = exp_config.get('target_lang', 'es')
+        self.source_lang = exp_config['source_lang']
+        self.target_lang = exp_config['target_lang']
 
         tokenize_script = exp_config.get('tokenize_script', None)
         detokenize_script = exp_config.get('detokenize_script', None)

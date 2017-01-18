@@ -554,11 +554,11 @@ class IMTPredictor:
                         import ipdb; ipdb.set_trace()
 
                     if self.n_best == 1:
-                        ftrans.write((nbest_translations[0] + '\n').decode('utf8'))
+                        ftrans.write((nbest_translations[0] + '\n'))
                         total_cost += nbest_costs[0]
                     else:
                         # one blank line to separate each nbest list
-                        ftrans.write('\n'.join(nbest_translations).decode('utf8') + '\n\n')
+                        ftrans.write('\n'.join(nbest_translations) + '\n\n')
                         total_cost += sum(nbest_costs)
 
                     if i != 0 and i % 100 == 0:
@@ -765,15 +765,15 @@ def split_refs_into_prefix_suffix_files(refs_file, config_obj, n_best=1):
                     suffix_text = sampling_base._idx_to_word(suffix, trg_ivocab)
                     assert len(prefix_text) > 0, 'prefix cannot be empty'
 
-                    dup_sources.write(source_text.decode('utf8') + '\n')
-                    prefix_file.write(prefix_text.decode('utf8') + '\n')
+                    dup_sources.write(source_text + u'\n')
+                    prefix_file.write(prefix_text + u'\n')
 
                     # we use the suffix file as references for the n-best list, so we may need to duplicate it
                     for _ in range(n_best):
-                        suffix_file.write(suffix_text.decode('utf8') + '\n')
+                        suffix_file.write(suffix_text + u'\n')
                     # if this is an n_best list, separate lists by new lines
                     if n_best > 1:
-                        suffix_file.write('\n')
+                        suffix_file.write(u'\n')
 
 
     return dup_sources_file, prediction_prefixes, prediction_suffixes

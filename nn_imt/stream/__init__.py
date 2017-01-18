@@ -20,6 +20,16 @@ def _length(sentence_pair):
     """Assumes suffix is the fourth element in the tuple."""
     return len(sentence_pair[3])
 
+def n_constraints_from_sequence(seq, n_constraints):
+    """
+    Select N non-overlapping constraints from sequence, use heuristics to determine the max constraint length
+
+
+    :param ref_seq:
+    :param ref_seq:
+    :return:
+    """
+
 
 # WORKING: transformer which takes source + target, and adds `constraints` `constraints_mask`, `model_choice_sequence`
 # WORKING: note that this transformer expects the _FULL_ target as reference, not just the suffix
@@ -73,11 +83,13 @@ class ConstraintModelStreamTransformer:
         reference = data[1]
 
         # TODO: this is only a placeholder for the full constraint generation routine
+        # WORKING: replace this function with the generation of N arbitrary constraints
         sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference,
                                                                                  bos_token=True,
                                                                                  eos_token=True,
                                                                                  **kwargs))
 
+        # WORKING: replace this function with the generation of N arbitrary constraints
         # TODO: HACK here -- pairs should be pre-filtered so that the ratio cannot be crazy skewed
         if self.min_suffix_source_ratio is not None and (float(len(reference)) / float(len(source))) >= 0.8:
             source_len = float(len(sources[0]))
@@ -118,26 +130,26 @@ class ConstraintModelStreamTransformer:
         # just repeat the reference the required number of times
         repeated_references = [reference for _ in target_suffixes]
 
-	# now map the constraint model indices in the references to their pointer model indices
-	# Note that we _must_ know the indices of the constraints in the reference
-	mapped_references = []
-	for constraint_seq, constraint_len, ref_seq in zip(target_prefixes, prefix_lens, repeated_references):
-            #import ipdb; ipdb.set_trace()
-	    try:
-	        assert tuple(constraint_seq) == tuple(ref_seq[:constraint_len]), 'the reference indices must match the constraint indices'
-	    except:
+        # now map the constraint model indices in the references to their pointer model indices
+        # Note that we _must_ know the indices of the constraints in the reference
+        mapped_references = []
+        for constraint_seq, constraint_len, ref_seq in zip(target_prefixes, prefix_lens, repeated_references):
+            try:
+                assert tuple(constraint_seq) == tuple(ref_seq[:constraint_len]), 'the reference indices must match the constraint indices'
+            except AssertionError:
                 import ipdb; ipdb.set_trace()
-	    # map the constraint indices to pointer indices
-	    # TODO: this is a hack that we can only do with prefix constraints
-	    mapped_ref = list(ref_seq)
-	    mapped_ref[:constraint_len] = range(constraint_len)
-	    mapped_references.append(mapped_ref)
+
+            # map the constraint indices to pointer indices
+            # TODO: this is a hack that we can only do with prefix constraints
+            mapped_ref = list(ref_seq)
+            mapped_ref[:constraint_len] = range(constraint_len)
+            mapped_references.append(mapped_ref)
 
         #if user wants static samples, reset the random state so that the samples will be the same next time around
         # TODO: this won't work, we actually want to reset it after a complete epoch
         # TODO: check calls to reset()? possibly overload that
-        if self.static_samples == True:
-            self.random_state = numpy.random.RandomState(self.random_seed)
+        # if self.static_samples == True:
+        #     self.random_state = numpy.random.RandomState(self.random_seed)
 
         # WORKING HERE: runtime bug in shapes
         #print([(k,[len(a) for a in s]) for k,s in zip(['target_prefixes', 'target_suffixes', 'model_choice_sequence'],
@@ -234,11 +246,8 @@ class PrefixSuffixStreamTransformer:
     """
     Takes a stream of (source, target) and adds the sources ('suffixes', 'prefixes'),
 
-
-
     Parameters
     ----------
-
 
     Notes
     -----
@@ -274,7 +283,7 @@ class PrefixSuffixStreamTransformer:
         source = data[0]
         reference = data[1]
 
-        # TODO: there is wasted computation here, since we will need to flatten the sources back out again later
+        # Note: there is wasted computation here, since we will need to flatten the sources back out again later
         sources, target_prefixes, target_suffixes = zip(*map_pair_to_imt_triples(source, reference,
                                                                                  bos_token=True,
                                                                                  eos_token=True,
@@ -346,9 +355,9 @@ class CallPredictionFunctionOnStream:
         predictions = output[0].argmax(axis=-1).T
         tags = (predictions == data[6]).astype('float32')
 
+        # Note: features which could be added
         # add softmax score of the chosen tag to the output
         # add features for source len, prefix len, position in suffix (position in suffix only makes sense if we're training on predictions)
-        # WORKING: truncate by finding EOS token
 
         # (time, batch, vocab)
         exp_output = numpy.exp(output[0])
@@ -417,7 +426,7 @@ class IMTSampleStreamTransformer:
         filtered_scores = numpy.array(filtered_scores, dtype='float32')
         print('filtered scores for this sample: {}'.format(scores))
 
-        # WORKING: see if we can ever catch a nan here
+        # Note: we might get a nan here
         test_probs = (seq_probs**0.005) / (seq_probs**0.005).sum()
         test_expectations = (test_probs * filtered_scores).sum()
         print('expected score for this sample: {}'.format(test_expectations))
@@ -496,7 +505,7 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
         cPickle.load(open(trg_vocab)),
         bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
 
-    # TODO: should training stream actually have begin and end tokens?
+    # Note: should training stream actually have begin and end tokens?
     # Note: this actually depends upon how the system was pre-trained, but systems used for initialization
     # Note: should _always_ have BOS tokens
 

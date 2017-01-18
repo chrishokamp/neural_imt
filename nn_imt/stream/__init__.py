@@ -502,13 +502,15 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
 
     # Get text files from both source and target
     src_dataset = TextFile([src_data], src_vocab,
-                           bos_token='<S>',
-                           eos_token='</S>',
-                           unk_token='<UNK>')
+                           bos_token=u'<S>',
+                           eos_token=u'</S>',
+                           unk_token=u'<UNK>',
+                           encoding='utf8')
     trg_dataset = TextFile([trg_data], trg_vocab,
-                           bos_token='<S>',
-                           eos_token='</S>',
-                           unk_token='<UNK>')
+                           bos_token=u'<S>',
+                           eos_token=u'</S>',
+                           unk_token=u'<UNK>',
+                           encoding='utf8')
 
     # Merge them to get a source, target pair
     stream = Merge([src_dataset.get_example_stream(),
@@ -599,7 +601,7 @@ def get_tr_stream_with_prefixes(src_vocab, trg_vocab, src_data, trg_data, src_vo
     }
     mask_sources = ('source', 'target', 'target_prefix', 'target_suffix')
     padding_symbols = [src_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1, trg_vocab_size - 1]
-    # TODO: Model choice sequece actually doesn't need to be masked??
+    # TODO: Model choice sequence actually doesn't need to be masked??
     if use_constraint_pointer_model:
         mask_sources = mask_sources + ('model_choice_sequence',)
         # we pad the model choice sequence with 0
@@ -631,13 +633,15 @@ def get_dev_stream_with_prefixes(val_set=None, val_set_grndtruth=None, src_vocab
             bos_idx=0, eos_idx=trg_vocab_size - 1, unk_idx=unk_id)
 
         dev_source_dataset = TextFile([val_set], src_vocab,
-                                      bos_token='<S>',
-                                      eos_token='</S>',
-                                      unk_token='<UNK>')
+                                      bos_token=u'<S>',
+                                      eos_token=u'</S>',
+                                      unk_token=u'<UNK>',
+                                      encoding='utf8')
         dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab,
-                                      bos_token='<S>',
-                                      eos_token='</S>',
-                                      unk_token='<UNK>')
+                                      bos_token=u'<S>',
+                                      eos_token=u'</S>',
+                                      unk_token=u'<UNK>',
+                                      encoding='utf8')
 
         dev_stream = Merge([dev_source_dataset.get_example_stream(),
                             dev_target_dataset.get_example_stream()],
@@ -690,21 +694,25 @@ def get_dev_stream_with_prefix_file(val_set=None, val_set_grndtruth=None, val_se
         # Note: The reason that we need EOS tokens in the reference file is that IMT systems need to evaluate metrics
         # Note: which count prediction of the </S> token, and evaluation scripts are called on the files
         dev_source_dataset = TextFile([val_set], src_vocab,
-                                      bos_token='<S>',
-                                      eos_token='</S>',
-                                      unk_token='<UNK>')
+                                      bos_token=u'<S>',
+                                      eos_token=u'</S>',
+                                      unk_token=u'<UNK>',
+                                      encoding='utf8')
         dev_target_dataset = TextFile([val_set_grndtruth], trg_vocab,
-                                      bos_token='<S>',
-                                      eos_token='</S>',
-                                      unk_token='<UNK>')
+                                      bos_token=u'<S>',
+                                      eos_token=u'</S>',
+                                      unk_token=u'<UNK>',
+                                      encoding='utf8')
         dev_prefix_dataset = TextFile([val_set_prefixes], trg_vocab,
-                                      bos_token='<S>',
+                                      bos_token=u'<S>',
                                       eos_token=None,
-                                      unk_token='<UNK>')
+                                      unk_token=u'<UNK>',
+                                      encoding='utf8')
         dev_suffix_dataset = TextFile([val_set_suffixes], trg_vocab,
                                       bos_token=None,
                                       eos_token=None,
-                                      unk_token='<UNK>')
+                                      unk_token=u'<UNK>',
+                                      encoding='utf8')
 
         dev_stream = Merge([dev_source_dataset.get_example_stream(),
                             dev_target_dataset.get_example_stream(),

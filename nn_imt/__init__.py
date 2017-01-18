@@ -50,14 +50,13 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
     source_sentence = tensor.lmatrix('source')
     source_sentence_mask = tensor.matrix('source_mask')
 
-    # Note that the _names_ are changed from normal NMT
+    # Note that the theano variable _names_ are changed from normal NMT
     # for IMT training, we use only the suffix as the reference
     target_suffix = tensor.lmatrix('target_suffix')
     target_suffix_mask = tensor.matrix('target_suffix_mask')
 
     target_prefix = tensor.lmatrix('target_prefix')
     target_prefix_mask = tensor.matrix('target_prefix_mask')
-
 
     # Construct model
     logger.info('Building RNN encoder-decoder')
@@ -84,8 +83,6 @@ def main(config, tr_stream, dev_stream, source_vocab, target_vocab, use_bokeh=Fa
         use_initial_state_representation = True
         initial_state_representation=prefix_encoder.apply(target_prefix, target_prefix_mask)
 
-    # WORKING: add pointer model over constraints
-    # WORKING: implement the constraint pointer model
     use_constraint_pointer_model = config.get('use_constraint_pointer_model', False)
     model_choice_sequence = None
     true_target=None

@@ -291,10 +291,9 @@ class PartialSequenceGenerator(BaseSequenceGenerator):
 
             glimpses = {name: results[name] for name in self._glimpse_names}
             glimpse_dict = {k: v[-1] for k,v in glimpses.items()}
-            # WORKING: we need to reset these to the correct values
-            # WORKING: issue -- the prefix initial state is a dummy, but the states of this transition were initialized
-            # WORKING: with the dimensions of the source, therefore those are wrong
-            # WORKING: solution: replace those states with the prefix dims
+            # Note: issue -- the prefix initial state is a dummy, but the states of this transition were initialized
+            # Note: with the dimensions of the source, therefore those are wrong
+            # Note: solution: replace those states with the prefix dims
             if 'weights_0' in glimpse_dict:
                 prefix_representation = kwargs['prefix_representation']
                 glimpse_dict['weighted_averages_0'] = tensor.zeros((prefix_representation.shape[1], prefix_representation.shape[-1]))
@@ -1079,8 +1078,8 @@ class NMTPrefixDecoder(Initializable):
         self.representation_dim = representation_dim
         self.theano_seed = theano_seed
 
-        # Working: transition optionally initializes initial state from source end states (inspired by GNMT)
-        # Working: initial states of transition from _ANY_ representation -- i.e. target constraints
+        # Note: transition can optionally initialize initial state from source end states (inspired by GNMT)
+        # TODO: initial states of transition from _ANY_ representation -- i.e. target constraints
         if use_initial_state_representation:
             # Note: we assume that representation dim is the same as state_dim
             # Note: default 'representation_name' kwarg in the transition is 'initial_state_representation'

@@ -157,7 +157,7 @@ if __name__ == "__main__":
         evaluation_metrics = config_obj.get('evaluation_metrics', ['bleu'])
         n_best_list_metrics = set(['imt_ndcg'])
         n_best_rank = config_obj.get('n_best', None)
-        # WORKING: support imt F1 and BLEU for any N-best param (just write a new file)
+        # TODO: support imt F1 and BLEU for any N-best param (just write a new file)
         if n_best_rank > 1:
             original_metrics = set(evaluation_metrics)
             evaluation_metrics = [m for m in evaluation_metrics if m in n_best_list_metrics]
@@ -166,7 +166,7 @@ if __name__ == "__main__":
             logger.warn('Therefore, I removed the following metrics from your list: {}'.format(removed_metrics))
 
         # translate if necessary, write output file, call external evaluation tools and show output
-        # TODO: there is an error here if we don't check that hyps and refs have the same number of lines
+        # Note: there could be an error here if we don't check that hyps and refs have the same number of lines
         translated_output_file = config_obj.get('translated_output_file', None)
         if translated_output_file is not None and os.path.isfile(translated_output_file):
             logger.info('{} already exists, so I\'m evaluating the BLEU score of this file with respect to the ' +
@@ -192,6 +192,8 @@ if __name__ == "__main__":
             else:
                 sources_file = config_obj['test_set']
                 references_file = config_obj['test_gold_refs']
+
+            # TODO: add logic to use a file containing the constraints for this test set
 
             glimpse_file = config_obj.get('glimpse_file', None)
             word_level_cost_file = config_obj.get('word_level_cost_file', None)
@@ -297,7 +299,6 @@ if __name__ == "__main__":
 
         confidence.main(config_obj, training_stream, dev_stream, src_vocab, trg_vocab, args.bokeh)
 
-
     # this mode is used to output the confidence model scores for a datastream consisting of (source, prefix, hyp)
     # build the model and the graph which will get confidence values
     elif mode == 'output-confidence':
@@ -359,7 +360,6 @@ if __name__ == "__main__":
             target_lang = config_obj['target_lang']
             predictor = IMTPredictor(config_obj)
             predictors[(source_lang, target_lang)] = predictor
-
 
         # start restful server
         run_imt_server(predictors)

@@ -519,7 +519,7 @@ class IMTPredictor:
 
                 assert len(source_lines) == len(prefix_lines), 'Source and reference files must be the same length'
                 for i, instance in enumerate(zip(source_lines, prefix_lines)):
-                    logger.info("Translating segment: {}".format(i))
+                    logger.info(u"Translating segment: {}".format(i))
 
                     # Note: tokenization is not currently implemented -- assumes whitespace tokenization!!!
                     # Right now, tokenization happens in self.map_idx_or_unk if predict_segment is passed a string
@@ -691,11 +691,11 @@ class IMTPredictor:
                 except AssertionError as e:
                     src_in = IMTPredictor.sutils._idx_to_word(segment, self.src_ivocab)
                     trans_out = IMTPredictor.sutils._idx_to_word(trans_out_idxs, self.trg_ivocab)
-                    logger.error("ERROR: {} does not end with the EOS symbol".format(trans_out))
-                    logger.error("I'm continuing anyway...")
+                    logger.error(u"ERROR: {} does not end with the EOS symbol".format(trans_out))
+                    logger.error(u"I'm continuing anyway...")
             except ValueError:
-                logger.info("Can NOT find a translation for line: {}".format(src_in))
-                trans_out = '<UNK>'
+                logger.info(u"Can NOT find a translation for line: {}".format(src_in))
+                trans_out = u'<UNK>'
                 cost = 0.
 
             if detokenize:
@@ -704,9 +704,9 @@ class IMTPredictor:
                 # strip off the eol symbol
                 trans_out = trans_out.strip()
 
-            logger.info("Source: {}".format(src_in))
-            logger.info("Prefix: {}".format(target_prefix))
-            logger.info("Target Hypothesis: {}".format(trans_out))
+            logger.info(u"Source: {}".format(src_in))
+            logger.info(u"Prefix: {}".format(target_prefix))
+            logger.info(u"Target Hypothesis: {}".format(trans_out))
 
             best_n_hyps.append(trans_out)
             best_n_costs.append(cost)

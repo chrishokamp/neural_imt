@@ -624,13 +624,19 @@ class IMTPredictor:
                 target_prefix, _ = target_tokenizer.communicate(target_prefix.encode('utf-8'))
                 target_prefix = target_prefix.strip().decode('utf-8')
 
+        # WORKING: there should never be an unknown token in the source -- error if this happens
+        segment_toks = segment.split()
         segment = self.map_idx_or_unk(segment, self.src_vocab, self.unk_idx)
+        if self.unk_idx in segment:
+            logger.error('Unknown token occurred in input sequence: {}'.format(zip(segment_toks, segment)))
+            raise ValueError
 
         if len(segment) == 0:
             segment = [self.src_vocab[u'<S>']]
 
         seq = IMTPredictor.sutils._oov_to_unk(
             segment, self.exp_config['src_vocab_size'], self.unk_idx)
+
         input_ = numpy.tile(seq, (self.exp_config['beam_size'], 1))
 
         if max_length is None:
